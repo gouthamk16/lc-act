@@ -1,0 +1,289 @@
+from __future__ import annotations
+
+import argparse
+import signal
+import sys
+import time
+from contextlib import nullcontext
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Sequence
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+from torch.utils.data import DataLoader
+
+from lc_act.types import Batch, Checkpoint, NormalizeStats
+
+if TYPE_CHECKING:
+    from lc_act.model import LcAct
+
+
+class StopFlag:
+    def __init__(self) -> None:
+        self.requested = False
+
+    def request(self, *_args: object) -> None:
+        self.requested = True
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train LC-ACT on LIBERO-Object")
+    parser.add_argument("--out", type=Path, default=Path("outputs/lc_act"))
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--max-hours", type=float, default=2)
+    parser.add_argument("--save-every", type=int, default=100)
+    parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument("--repo-id", default="lerobot/libero")
+    return parser.parse_args(argv)
+
+
+def training_deadline(max_hours: float, now: float) -> float | None:
+    if max_hours <= 0:
+        return None
+    return now + max_hours * 3600
+
+
+def make_loader(dataset: torch.utils.data.Dataset, batch_size: int) -> DataLoader:
+    from lc_act.data import collate
+
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=0,
+        collate_fn=collate,
+        shuffle=True,
+    )
+
+
+def _move_batch(batch: Batch, device: torch.device) -> Batch:
+    return Batch(
+        workspace=batch.workspace.to(device),
+        wrist=batch.wrist.to(device),
+        state=batch.state.to(device),
+        action=batch.action.to(device),
+        tasks=batch.tasks,
+    )
+
+
+def _train_batch(
+    model: nn.Module,
+    batch: Batch,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    device: torch.device,
+) -> float:
+    optimizer.zero_grad(set_to_none=True)
+    autocast = torch.autocast("cuda") if device.type == "cuda" else nullcontext()
+    with autocast:
+        prediction = model(batch.workspace, batch.wrist, batch.state, batch.tasks)
+        loss = F.l1_loss(prediction, batch.action)
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+    return loss.detach().item()
+
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    device: torch.device,
+    deadline: float | None = None,
+    max_steps: int | None = None,
+    stop: StopFlag | None = None,
+    global_step: int = 0,
+    save_every: int = 0,
+    persist: Callable[[int], None] | None = None,
+) -> tuple[float, float, int, int]:
+    model.train()
+    if hasattr(model, "text"):
+        model.text.eval()
+    total_loss = 0.0
+    samples = 0
+    steps = 0
+    started = time.monotonic()
+    halt = stop if stop is not None else StopFlag()
+    for raw_batch in loader:
+        if halt.requested:
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        batch = _move_batch(raw_batch, device)
+        loss = _train_batch(model, batch, optimizer, scaler, device)
+        count = batch.action.shape[0]
+        total_loss += loss * count
+        samples += count
+        steps += 1
+        global_step += 1
+        if persist is not None and save_every > 0 and global_step % save_every == 0:
+            persist(global_step)
+        if max_steps is not None and steps >= max_steps:
+            break
+    elapsed = max(time.monotonic() - started, 1e-9)
+    return total_loss / max(samples, 1), samples / elapsed, steps, global_step
+
+
+def _atomic_torch_save(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(payload, tmp)
+    tmp.replace(path)
+
+
+def save_checkpoint(
+    path: Path,
+    model: "LcAct",
+    stats: NormalizeStats,
+    tasks: list[str],
+    epoch: int,
+    step: int,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+) -> None:
+    from lc_act.model import trainable_state_dict
+
+    checkpoint = Checkpoint(
+        trainable=trainable_state_dict(model),
+        stats=stats,
+        horizon=model.horizon,
+        tasks=tasks,
+        epoch=epoch,
+        step=step,
+        optimizer=optimizer.state_dict(),
+        scaler=scaler.state_dict(),
+    )
+    _atomic_torch_save(path, checkpoint.to_payload())
+
+
+def _stats_on_device(stats: NormalizeStats, device: torch.device) -> NormalizeStats:
+    return NormalizeStats(
+        state_mean=stats.state_mean.to(device),
+        state_std=stats.state_std.to(device),
+        action_mean=stats.action_mean.to(device),
+        action_std=stats.action_std.to(device),
+    )
+
+
+def _model_from_checkpoint(
+    checkpoint: Checkpoint,
+    device: torch.device,
+) -> tuple["LcAct", NormalizeStats]:
+    from lc_act.model import ClipTextEncoder, LcAct, ResNetSpatial, load_trainable
+
+    model = LcAct(
+        ResNetSpatial(pretrained=False),
+        ClipTextEncoder(),
+        horizon=checkpoint.horizon,
+    )
+    load_trainable(model, checkpoint.trainable)
+    return model.to(device), _stats_on_device(checkpoint.stats, device)
+
+
+def load_checkpoint(path: Path, device: torch.device) -> tuple["LcAct", NormalizeStats]:
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    return _model_from_checkpoint(Checkpoint.from_payload(payload), device)
+
+
+def load_resume(
+    path: Path,
+    device: torch.device,
+) -> tuple["LcAct", NormalizeStats, Checkpoint]:
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    checkpoint = Checkpoint.from_payload(payload)
+    if checkpoint.optimizer is None:
+        raise RuntimeError("checkpoint missing optimizer; cannot resume")
+    model, stats = _model_from_checkpoint(checkpoint, device)
+    return model, stats, checkpoint
+
+
+def _run_training(
+    args: argparse.Namespace,
+    model: "LcAct",
+    loader: DataLoader,
+    stats: NormalizeStats,
+    tasks: list[str],
+    device: torch.device,
+    start_epoch: int = 0,
+    start_step: int = 0,
+    resume: Checkpoint | None = None,
+) -> None:
+    optimizer = torch.optim.AdamW(
+        filter(lambda parameter: parameter.requires_grad, model.parameters()),
+        lr=1e-4,
+    )
+    if resume is not None and resume.optimizer is not None:
+        optimizer.load_state_dict(resume.optimizer)
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
+    if resume is not None and resume.scaler is not None:
+        scaler.load_state_dict(resume.scaler)
+    deadline = training_deadline(args.max_hours, time.monotonic())
+    max_steps = 1 if device.type == "cpu" else None
+    stop = StopFlag()
+    signal.signal(signal.SIGINT, stop.request)
+    signal.signal(signal.SIGTERM, stop.request)
+    step = start_step
+    last = args.out / "last.pt"
+
+    def persist(epoch: int, current_step: int) -> None:
+        save_checkpoint(
+            last, model, stats, tasks, epoch, current_step, optimizer, scaler,
+        )
+
+    for epoch in range(start_epoch, args.epochs):
+        try:
+            mean_loss, samples_per_second, steps, step = train_one_epoch(
+                model,
+                loader,
+                optimizer,
+                scaler,
+                device,
+                deadline=deadline,
+                max_steps=max_steps,
+                stop=stop,
+                global_step=step,
+                save_every=args.save_every,
+                persist=lambda current: persist(epoch, current),
+            )
+        except torch.cuda.OutOfMemoryError:
+            print("drop batch to 4 or drop wrist camera")
+            sys.exit(1)
+        persist(epoch if stop.requested else epoch + 1, step)
+        if steps == 0:
+            return
+        print(
+            f"epoch={epoch} l1={mean_loss:.4f} "
+            f"samples/s={samples_per_second:.1f}"
+        )
+        if device.type == "cpu" or stop.requested:
+            return
+        if deadline is not None and time.monotonic() >= deadline:
+            return
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cpu" and args.epochs != 1:
+        raise RuntimeError("real training requires CUDA; use --epochs 1 for CPU smoke")
+
+    from lc_act.data import load_object_dataset
+    from lc_act.model import ClipTextEncoder, LcAct, ResNetSpatial
+
+    dataset, data_stats, tasks = load_object_dataset(args.repo_id)
+    loader = make_loader(dataset, args.batch_size)
+    if args.resume is not None:
+        model, stats, checkpoint = load_resume(args.resume, device)
+        _run_training(
+            args, model, loader, stats, checkpoint.tasks, device,
+            start_epoch=checkpoint.epoch, start_step=checkpoint.step, resume=checkpoint,
+        )
+        return
+    model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder()).to(device)
+    _run_training(args, model, loader, data_stats, tasks, device)
+
+
+if __name__ == "__main__":
+    main()
