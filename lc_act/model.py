@@ -89,6 +89,9 @@ class LcAct(nn.Module):
         self.encoder = _make_encoder(d_model, n_heads, ffn_dim, n_encoder_layers)
         self.decoder = _make_decoder(d_model, n_heads, ffn_dim, n_decoder_layers)
         self.action_head = nn.Linear(d_model, ACTION_DIM)
+        self.film = nn.Linear(d_model, 2 * d_model)
+        nn.init.zeros_(self.film.weight)
+        nn.init.zeros_(self.film.bias)
 
     def forward(
         self,
@@ -97,14 +100,19 @@ class LcAct(nn.Module):
         state: torch.Tensor,
         tasks: list[str],
     ) -> torch.Tensor:
-        ws = self._image_tokens(workspace, camera=0)
-        wr = self._image_tokens(wrist, camera=1)
-        tx = self.text_proj(self.text.encode(tasks)).unsqueeze(1) + self.type_embed[0]
+        lang = self.text_proj(self.text.encode(tasks)).unsqueeze(1)
+        ws = self._modulate(self._image_tokens(workspace, camera=0), lang)
+        wr = self._modulate(self._image_tokens(wrist, camera=1), lang)
+        tx = lang + self.type_embed[0]
         st = self.state_proj(state).unsqueeze(1) + self.type_embed[1]
         memory = self.encoder(torch.cat([ws, wr, tx, st], dim=1))
         queries = self.action_queries.unsqueeze(0).expand(state.shape[0], -1, -1)
         decoded = self.decoder(queries, memory)
         return self.action_head(decoded)
+
+    def _modulate(self, tokens: torch.Tensor, lang: torch.Tensor) -> torch.Tensor:
+        gamma, beta = self.film(lang).chunk(2, dim=-1)
+        return tokens * (1 + gamma) + beta
 
     def _image_tokens(self, images: torch.Tensor, camera: int) -> torch.Tensor:
         tokens = self.vision_proj(self.vision.encode(images))
