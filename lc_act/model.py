@@ -51,6 +51,7 @@ def load_trainable(model: "LcAct", state_dict: dict[str, torch.Tensor]) -> "LcAc
 def _make_encoder(d_model: int, n_heads: int, ffn_dim: int, n_layers: int) -> nn.TransformerEncoder:
     layer = nn.TransformerEncoderLayer(
         d_model=d_model, nhead=n_heads, dim_feedforward=ffn_dim, batch_first=True,
+        norm_first=True,
     )
     return nn.TransformerEncoder(layer, num_layers=n_layers)
 
@@ -58,6 +59,7 @@ def _make_encoder(d_model: int, n_heads: int, ffn_dim: int, n_layers: int) -> nn
 def _make_decoder(d_model: int, n_heads: int, ffn_dim: int, n_layers: int) -> nn.TransformerDecoder:
     layer = nn.TransformerDecoderLayer(
         d_model=d_model, nhead=n_heads, dim_feedforward=ffn_dim, batch_first=True,
+        norm_first=True,
     )
     return nn.TransformerDecoder(layer, num_layers=n_layers)
 
