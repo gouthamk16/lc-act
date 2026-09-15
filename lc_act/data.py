@@ -21,6 +21,25 @@ def object_task_indices(task_to_index: dict[str, int]) -> set[int]:
     return {idx for task, idx in task_to_index.items() if is_object_task(task)}
 
 
+def split_indices_by_episode(
+    episode_index: list[int],
+    val_frac: float = 0.1,
+) -> tuple[list[int], list[int]]:
+    unique = sorted(set(episode_index))
+    n_val = max(1, int(round(len(unique) * val_frac)))
+    val_eps = set(unique[-n_val:])
+    train_idx: list[int] = []
+    val_idx: list[int] = []
+    for i, episode in enumerate(episode_index):
+        if episode in val_eps:
+            val_idx.append(i)
+        else:
+            train_idx.append(i)
+    if not train_idx or not val_idx:
+        raise ValueError("episode split produced an empty train or val set")
+    return train_idx, val_idx
+
+
 def pad_action_chunk(actions: torch.Tensor, start: int, horizon: int) -> torch.Tensor:
     if actions.ndim != 2 or actions.shape[-1] != ACTION_DIM:
         raise ValueError(f"expected (T, {ACTION_DIM}), got {tuple(actions.shape)}")

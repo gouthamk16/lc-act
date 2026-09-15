@@ -6,3 +6,5 @@ __pycache__/
 *.egg-info/
 .superpowers/
 convo.md
+run.log
+artifacts/results.tsv

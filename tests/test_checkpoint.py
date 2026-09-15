@@ -53,3 +53,9 @@ def test_load_trainable_rejects_missing_camera_embed():
 def test_max_hours_zero_means_no_deadline():
     args = parse_args(["--max-hours", "0"])
     assert training_deadline(args.max_hours, now=10.0) is None
+
+
+def test_budget_seconds_and_val_batches_parse():
+    args = parse_args(["--budget-seconds", "300", "--val-batches", "4"])
+    assert args.budget_seconds == 300.0
+    assert args.val_batches == 4

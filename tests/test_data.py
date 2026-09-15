@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from lc_act.data import (
@@ -8,6 +9,7 @@ from lc_act.data import (
     is_object_task,
     object_task_indices,
     pad_action_chunk,
+    split_indices_by_episode,
 )
 from lc_act.types import NormalizeStats
 
@@ -21,6 +23,19 @@ def test_object_filter_keeps_basket_picks_only():
     assert is_object_task(keep)
     assert not is_object_task(drop_spatial)
     assert not is_object_task(drop_long)
+
+
+def test_split_indices_by_episode_holds_out_last_fraction():
+    episodes = [0, 0, 1, 1, 2, 2, 3, 3]
+    train_idx, val_idx = split_indices_by_episode(episodes, val_frac=0.25)
+    assert train_idx == [0, 1, 2, 3, 4, 5]
+    assert val_idx == [6, 7]
+
+
+def test_split_indices_by_episode_rejects_empty_side():
+    with pytest.raises(ValueError, match="empty"):
+        split_indices_by_episode([0, 0], val_frac=1.0)
+
 
 
 def test_object_task_indices_uses_strings_not_hub_order():

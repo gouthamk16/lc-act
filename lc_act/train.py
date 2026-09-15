@@ -36,6 +36,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--repo-id", default="lerobot/libero")
+    parser.add_argument("--budget-seconds", type=float, default=None)
+    parser.add_argument("--val-batches", type=int, default=20)
     return parser.parse_args(argv)
 
 
@@ -45,7 +47,11 @@ def training_deadline(max_hours: float, now: float) -> float | None:
     return now + max_hours * 3600
 
 
-def make_loader(dataset: torch.utils.data.Dataset, batch_size: int) -> DataLoader:
+def make_loader(
+    dataset: torch.utils.data.Dataset,
+    batch_size: int,
+    shuffle: bool = True,
+) -> DataLoader:
     from lc_act.data import collate
 
     return DataLoader(
@@ -53,7 +59,7 @@ def make_loader(dataset: torch.utils.data.Dataset, batch_size: int) -> DataLoade
         batch_size=batch_size,
         num_workers=0,
         collate_fn=collate,
-        shuffle=True,
+        shuffle=shuffle,
     )
 
 
@@ -85,6 +91,35 @@ def _train_batch(
     return loss.detach().item()
 
 
+def peak_gpu_gb(device: torch.device) -> float:
+    if device.type != "cuda":
+        return 0.0
+    return torch.cuda.max_memory_allocated() / 1e9
+
+
+@torch.no_grad()
+def evaluate_val(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    max_batches: int,
+) -> float:
+    model.eval()
+    total = 0.0
+    samples = 0
+    for index, raw_batch in enumerate(loader):
+        if index >= max_batches:
+            break
+        batch = _move_batch(raw_batch, device)
+        autocast = torch.autocast("cuda") if device.type == "cuda" else nullcontext()
+        with autocast:
+            prediction = model(batch.workspace, batch.wrist, batch.state, batch.tasks)
+            loss = F.l1_loss(prediction, batch.action)
+        total += loss.item() * batch.action.shape[0]
+        samples += batch.action.shape[0]
+    return total / max(samples, 1)
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -97,6 +132,8 @@ def train_one_epoch(
     global_step: int = 0,
     save_every: int = 0,
     persist: Callable[[int], None] | None = None,
+    deadline_box: list[float | None] | None = None,
+    budget_seconds: float | None = None,
 ) -> tuple[float, float, int, int]:
     model.train()
     if hasattr(model, "text"):
@@ -106,13 +143,16 @@ def train_one_epoch(
     steps = 0
     started = time.monotonic()
     halt = stop if stop is not None else StopFlag()
+    box = deadline_box if deadline_box is not None else [deadline]
     for raw_batch in loader:
         if halt.requested:
             break
-        if deadline is not None and time.monotonic() >= deadline:
+        if box[0] is not None and time.monotonic() >= box[0]:
             break
         batch = _move_batch(raw_batch, device)
         loss = _train_batch(model, batch, optimizer, scaler, device)
+        if budget_seconds is not None and box[0] is None:
+            box[0] = time.monotonic() + budget_seconds
         count = batch.action.shape[0]
         total_loss += loss * count
         samples += count
@@ -209,6 +249,7 @@ def _run_training(
     start_epoch: int = 0,
     start_step: int = 0,
     resume: Checkpoint | None = None,
+    val_loader: DataLoader | None = None,
 ) -> None:
     optimizer = torch.optim.AdamW(
         filter(lambda parameter: parameter.requires_grad, model.parameters()),
@@ -219,13 +260,19 @@ def _run_training(
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     if resume is not None and resume.scaler is not None:
         scaler.load_state_dict(resume.scaler)
-    deadline = training_deadline(args.max_hours, time.monotonic())
+    budget = args.budget_seconds
+    if budget is not None and device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+    deadline_box: list[float | None] = [
+        None if budget else training_deadline(args.max_hours, time.monotonic())
+    ]
     max_steps = 1 if device.type == "cpu" else None
     stop = StopFlag()
     signal.signal(signal.SIGINT, stop.request)
     signal.signal(signal.SIGTERM, stop.request)
     step = start_step
     last = args.out / "last.pt"
+    last_train = 0.0
 
     def persist(epoch: int, current_step: int) -> None:
         save_checkpoint(
@@ -240,27 +287,37 @@ def _run_training(
                 optimizer,
                 scaler,
                 device,
-                deadline=deadline,
+                deadline=deadline_box[0],
                 max_steps=max_steps,
                 stop=stop,
                 global_step=step,
-                save_every=args.save_every,
-                persist=lambda current: persist(epoch, current),
+                save_every=0 if budget else args.save_every,
+                persist=None if budget else (lambda current: persist(epoch, current)),
+                deadline_box=deadline_box,
+                budget_seconds=budget,
             )
         except torch.cuda.OutOfMemoryError:
             print("drop batch to 4 or drop wrist camera")
             sys.exit(1)
-        persist(epoch if stop.requested else epoch + 1, step)
+        if budget is None:
+            persist(epoch if stop.requested else epoch + 1, step)
         if steps == 0:
-            return
+            break
+        last_train = mean_loss
         print(
             f"epoch={epoch} l1={mean_loss:.4f} "
             f"samples/s={samples_per_second:.1f}"
         )
         if device.type == "cpu" or stop.requested:
-            return
-        if deadline is not None and time.monotonic() >= deadline:
-            return
+            break
+        if deadline_box[0] is not None and time.monotonic() >= deadline_box[0]:
+            break
+    if val_loader is not None:
+        val = evaluate_val(model, val_loader, device, args.val_batches)
+        print(
+            f"Step {step} : train {last_train:.4f} | val {val:.4f} "
+            f"| gpu {peak_gpu_gb(device):.2f}GB"
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -269,20 +326,30 @@ def main(argv: Sequence[str] | None = None) -> None:
     if device.type == "cpu" and args.epochs != 1:
         raise RuntimeError("real training requires CUDA; use --epochs 1 for CPU smoke")
 
-    from lc_act.data import load_object_dataset
+    from lc_act.data import load_object_dataset, split_indices_by_episode
     from lc_act.model import ClipTextEncoder, LcAct, ResNetSpatial
 
     dataset, data_stats, tasks = load_object_dataset(args.repo_id)
-    loader = make_loader(dataset, args.batch_size)
+    val_loader = None
+    if args.budget_seconds is not None:
+        episodes = [int(ep) for ep in dataset.raw.hf_dataset["episode_index"]]
+        train_idx, val_idx = split_indices_by_episode(episodes)
+        train_set = torch.utils.data.Subset(dataset, train_idx)
+        val_set = torch.utils.data.Subset(dataset, val_idx)
+        loader = make_loader(train_set, args.batch_size, shuffle=True)
+        val_loader = make_loader(val_set, args.batch_size, shuffle=False)
+    else:
+        loader = make_loader(dataset, args.batch_size)
     if args.resume is not None:
         model, stats, checkpoint = load_resume(args.resume, device)
         _run_training(
             args, model, loader, stats, checkpoint.tasks, device,
-            start_epoch=checkpoint.epoch, start_step=checkpoint.step, resume=checkpoint,
+            start_epoch=checkpoint.epoch, start_step=checkpoint.step,
+            resume=checkpoint, val_loader=val_loader,
         )
         return
     model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder()).to(device)
-    _run_training(args, model, loader, data_stats, tasks, device)
+    _run_training(args, model, loader, data_stats, tasks, device, val_loader=val_loader)
 
 
 if __name__ == "__main__":
