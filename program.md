@@ -4,10 +4,11 @@ This is an experiment to have the LLM do its own research on LC-ACT.
 
 LC-ACT is a small language-conditioned action-chunking transformer for
 LIBERO-Object (Franka in MuJoCo). Overnight 20-epoch training reached train L1
-~0.099 and still **0/10** soup success. The loop metric below is **validation
-L1** on a held-out episode split, because 10-episode MuJoCo eval is too slow
-and too coarse for a 5-minute budget. Do not treat soup success as the keep
-signal.
+~0.099 and still **0/10** soup success. The 5-minute keep metric is
+**validation L1** on a held-out episode split. Each val line also reports
+**raw L1** (denormalized env units) and **grip** (gripper sign match after
+invert) so a z-scored L1 win that would fail soup can be rejected. Do not run
+10-episode soup inside the 5-minute loop.
 
 ## Setup
 
@@ -61,12 +62,16 @@ python -m lc_act.train --budget-seconds 300 --epochs 99 --max-hours 0 --save-eve
 The script prints epoch train L1 during the budget, then one grep-able eval line:
 
 ```
-Step 120 : train 0.5421 | val 0.5503 | gpu 2.10GB
+Step 120 : train 0.5421 | val 0.5503 | raw 0.1420 | grip 0.810 | gpu 2.10GB
 ```
 
-The metric we optimize is **validation L1** (`val`) — mean L1 on held-out Object-suite action chunks. Lower is better.
+- `val` — z-scored L1 (the training objective). Lower is better. This is the keep/discard metric.
+- `raw` — L1 after `invert_action`, in env units. Lower is better. Use it to catch z-score gaming.
+- `grip` — fraction of chunk steps whose denormalized gripper sign matches the demo. Higher is better.
 
-Extract the final val L1 and peak memory:
+Keep a change only if `val` is lower **and** `grip` does not drop by more than 0.03 vs the current champion. If `val` is slightly better but `raw` is much worse, discard.
+
+Extract the final val line:
 
 ```
 grep " | val " run.log | tail -1
@@ -76,26 +81,28 @@ grep " | val " run.log | tail -1
 
 When an experiment is done, log it to `artifacts/results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
 
-The TSV has a header row and 5 columns:
+The TSV has a header row and 7 columns:
 
 ```
-commit	val_loss	memory_gb	status	description
+commit	val_loss	raw_l1	grip_acc	memory_gb	status	description
 ```
 
 1. git commit hash (short, 7 chars)
 2. val_loss achieved (e.g. 1.234567) — use 0.000000 for crashes
-3. peak memory in GB, round to .1f (e.g. 2.1 — read the `gpu` field from the last eval line, already in GB) — use 0.0 for crashes
-4. status: `keep`, `discard`, or `crash`
-5. short text description of what this experiment tried
+3. raw_l1 (denormalized) — use 0.000000 for crashes; `-` for rows logged before this column existed
+4. grip_acc (0-1) — use 0.000 for crashes; `-` for older rows
+5. peak memory in GB, round to .1f — use 0.0 for crashes
+6. status: `keep`, `discard`, or `crash`
+7. short text description of what this experiment tried
 
 Example:
 
 ```
-commit	val_loss	memory_gb	status	description
-a1b2c3d	0.410000	2.1	keep	baseline
-b2c3d4e	0.390000	2.2	keep	QK-norm on encoder/decoder
-c3d4e5f	0.430000	2.1	discard	drop wrist camera tokens
-d4e5f6g	0.000000	0.0	crash	double d_model (OOM)
+commit	val_loss	raw_l1	grip_acc	memory_gb	status	description
+a1b2c3d	0.410000	0.120000	0.810	2.1	keep	baseline
+b2c3d4e	0.390000	0.110000	0.840	2.2	keep	QK-norm on encoder/decoder
+c3d4e5f	0.430000	0.130000	0.800	2.1	discard	drop wrist camera tokens
+d4e5f6g	0.000000	0.000000	0.000	0.0	crash	double d_model (OOM)
 ```
 
 ## The experiment loop
@@ -111,8 +118,10 @@ LOOP FOREVER:
 5. Read out the results: `grep " | val " run.log | tail -1`
 6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
 7. Record the results in the tsv (NOTE: do not commit the artifacts/results.tsv file, leave it untracked by git)
-8. If val_loss improved (lower), you "advance" the branch, keeping the git commit
-9. If val_loss is equal or worse, you git reset back to where you started
+8. If val_loss improved (lower) **and** grip_acc did not drop more than 0.03, you "advance" the branch, keeping the git commit
+9. If val_loss is equal or worse, or grip_acc collapsed, you git reset back to where you started
+
+After a stretch of architecture experiments, start a 10–15 hour train (`--max-hours 14 --epochs 99 --out outputs/lc_act`) on the champion **without** `--budget-seconds`. Backup any existing `outputs/lc_act/last.pt` first. Do this when either val L1 is clearly better than the instrumented champion (~0.60) or ideas have stalled and the champion's raw L1 / grip look healthy. The overnight run is the real bet; 5-minute val never replaces soup eval.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 

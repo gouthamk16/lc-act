@@ -6,6 +6,7 @@ import sys
 import time
 from contextlib import nullcontext
 from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Sequence
 
 import torch
@@ -91,10 +92,38 @@ def _train_batch(
     return loss.detach().item()
 
 
+@dataclass(frozen=True)
+class ValMetrics:
+    l1: float
+    raw_l1: float
+    grip_acc: float
+
+
 def peak_gpu_gb(device: torch.device) -> float:
     if device.type != "cuda":
         return 0.0
     return torch.cuda.max_memory_allocated() / 1e9
+
+
+def _grip_sign_match(pred_raw: torch.Tensor, gt_raw: torch.Tensor) -> torch.Tensor:
+    pred = pred_raw[..., -1]
+    gt = gt_raw[..., -1]
+    closed = (pred.abs() < 0.05) & (gt.abs() < 0.05)
+    return (pred.sign() == gt.sign()) | closed
+
+
+def _accumulate_val(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    stats: NormalizeStats,
+) -> tuple[float, float, float, int]:
+    count = target.shape[0]
+    l1 = F.l1_loss(prediction, target).item()
+    pred_raw = stats.invert_action(prediction.float())
+    gt_raw = stats.invert_action(target.float())
+    raw = F.l1_loss(pred_raw, gt_raw).item()
+    grip = _grip_sign_match(pred_raw, gt_raw).float().mean().item()
+    return l1 * count, raw * count, grip * count, count
 
 
 @torch.no_grad()
@@ -103,9 +132,13 @@ def evaluate_val(
     loader: DataLoader,
     device: torch.device,
     max_batches: int,
-) -> float:
+    stats: NormalizeStats,
+) -> ValMetrics:
     model.eval()
-    total = 0.0
+    stats = _stats_on_device(stats, device)
+    total_l1 = 0.0
+    total_raw = 0.0
+    total_grip = 0.0
     samples = 0
     for index, raw_batch in enumerate(loader):
         if index >= max_batches:
@@ -114,10 +147,17 @@ def evaluate_val(
         autocast = torch.autocast("cuda") if device.type == "cuda" else nullcontext()
         with autocast:
             prediction = model(batch.workspace, batch.wrist, batch.state, batch.tasks)
-            loss = F.l1_loss(prediction, batch.action)
-        total += loss.item() * batch.action.shape[0]
-        samples += batch.action.shape[0]
-    return total / max(samples, 1)
+            l1, raw, grip, count = _accumulate_val(prediction, batch.action, stats)
+        total_l1 += l1
+        total_raw += raw
+        total_grip += grip
+        samples += count
+    denom = max(samples, 1)
+    return ValMetrics(
+        l1=total_l1 / denom,
+        raw_l1=total_raw / denom,
+        grip_acc=total_grip / denom,
+    )
 
 
 def train_one_epoch(
@@ -273,6 +313,7 @@ def _run_training(
     step = start_step
     last = args.out / "last.pt"
     last_train = 0.0
+    finished_epoch = start_epoch
 
     def persist(epoch: int, current_step: int) -> None:
         save_checkpoint(
@@ -304,6 +345,7 @@ def _run_training(
         if steps == 0:
             break
         last_train = mean_loss
+        finished_epoch = epoch
         print(
             f"epoch={epoch} l1={mean_loss:.4f} "
             f"samples/s={samples_per_second:.1f}"
@@ -313,11 +355,14 @@ def _run_training(
         if deadline_box[0] is not None and time.monotonic() >= deadline_box[0]:
             break
     if val_loader is not None:
-        val = evaluate_val(model, val_loader, device, args.val_batches)
+        val = evaluate_val(model, val_loader, device, args.val_batches, stats)
         print(
-            f"Step {step} : train {last_train:.4f} | val {val:.4f} "
+            f"Step {step} : train {last_train:.4f} | val {val.l1:.4f} "
+            f"| raw {val.raw_l1:.4f} | grip {val.grip_acc:.3f} "
             f"| gpu {peak_gpu_gb(device):.2f}GB"
         )
+    if budget is not None:
+        persist(finished_epoch, step)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
