@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import signal
 import sys
 import time
@@ -42,6 +43,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args(argv)
+
+
+BASE_LR = 1e-4
+WARMUP_FRAC = 0.02
+
+
+def cosine_lr_scale(progress: float) -> float:
+    if progress < WARMUP_FRAC:
+        return max(progress / WARMUP_FRAC, 0.01)
+    rest = min(1.0, (progress - WARMUP_FRAC) / (1 - WARMUP_FRAC))
+    return 0.5 * (1 + math.cos(math.pi * rest))
 
 
 def training_deadline(max_hours: float, now: float) -> float | None:
@@ -178,6 +190,7 @@ def train_one_epoch(
     persist: Callable[[int], None] | None = None,
     deadline_box: list[float | None] | None = None,
     budget_seconds: float | None = None,
+    schedule: Callable[[int], None] | None = None,
 ) -> tuple[float, float, int, int]:
     model.train()
     if hasattr(model, "text"):
@@ -194,6 +207,8 @@ def train_one_epoch(
         if box[0] is not None and time.monotonic() >= box[0]:
             break
         batch = _move_batch(raw_batch, device)
+        if schedule is not None:
+            schedule(global_step)
         loss = _train_batch(model, batch, optimizer, scaler, device)
         if budget_seconds is not None and box[0] is None:
             box[0] = time.monotonic() + budget_seconds
@@ -297,7 +312,7 @@ def _run_training(
 ) -> None:
     optimizer = torch.optim.AdamW(
         filter(lambda parameter: parameter.requires_grad, model.parameters()),
-        lr=1e-4,
+        lr=BASE_LR,
         fused=device.type == "cuda",
     )
     if resume is not None and resume.optimizer is not None:
@@ -308,9 +323,24 @@ def _run_training(
     budget = args.budget_seconds
     if budget is not None and device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
+    started = time.monotonic()
     deadline_box: list[float | None] = [
-        None if budget else training_deadline(args.max_hours, time.monotonic())
+        None if budget else training_deadline(args.max_hours, started)
     ]
+    total_steps = max(args.epochs * len(loader), 1)
+
+    def progress(current_step: int) -> float:
+        deadline = deadline_box[0]
+        if budget is not None:
+            return 0.0 if deadline is None else 1 - (deadline - time.monotonic()) / budget
+        if deadline is not None:
+            return (time.monotonic() - started) / (deadline - started)
+        return current_step / total_steps
+
+    def schedule(current_step: int) -> None:
+        lr = BASE_LR * cosine_lr_scale(progress(current_step))
+        for group in optimizer.param_groups:
+            group["lr"] = lr
     max_steps = 1 if device.type == "cpu" else None
     stop = StopFlag()
     signal.signal(signal.SIGINT, stop.request)
@@ -341,6 +371,7 @@ def _run_training(
                 persist=None if budget else (lambda current: persist(epoch, current)),
                 deadline_box=deadline_box,
                 budget_seconds=budget,
+                schedule=schedule,
             )
         except torch.cuda.OutOfMemoryError:
             print("drop batch to 4 or drop wrist camera")
