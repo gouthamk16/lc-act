@@ -1,6 +1,7 @@
 from typing import Protocol
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from lc_act.posenc import grid_hw, sinusoidal_2d
@@ -15,6 +16,7 @@ from lc_act.types import (
     RESNET_DIM,
     STATE_DIM,
     TOKEN_DIM,
+    VISION_SIZE,
 )
 
 
@@ -141,7 +143,8 @@ class ResNetSpatial(nn.Module):
 
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         net = resnet18(weights=weights)
-        self.stem = nn.Sequential(*list(net.children())[:-2])
+        # Through layer3: at 128 px this is an 8x8 grid without layer4's 8.4M params.
+        self.stem = nn.Sequential(*list(net.children())[:-3])
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
         self.register_buffer("mean", mean)
@@ -149,6 +152,7 @@ class ResNetSpatial(nn.Module):
 
     def encode(self, images: torch.Tensor) -> torch.Tensor:
         x = _as_nchw_float(images).to(device=self.mean.device, dtype=self.mean.dtype)
+        x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
         x = (x - self.mean) / self.std
         feat = self.stem(x)
         return feat.flatten(2).transpose(1, 2)
