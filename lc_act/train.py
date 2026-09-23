@@ -38,7 +38,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--repo-id", default="lerobot/libero")
     parser.add_argument("--budget-seconds", type=float, default=None)
-    parser.add_argument("--val-batches", type=int, default=20)
+    parser.add_argument("--val-batches", type=int, default=200)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args(argv)
 
 
@@ -52,15 +54,17 @@ def make_loader(
     dataset: torch.utils.data.Dataset,
     batch_size: int,
     shuffle: bool = True,
+    workers: int = 0,
 ) -> DataLoader:
     from lc_act.data import collate
 
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        num_workers=0,
+        num_workers=workers,
         collate_fn=collate,
         shuffle=shuffle,
+        persistent_workers=workers > 0,
     )
 
 
@@ -294,6 +298,7 @@ def _run_training(
     optimizer = torch.optim.AdamW(
         filter(lambda parameter: parameter.requires_grad, model.parameters()),
         lr=1e-4,
+        fused=device.type == "cuda",
     )
     if resume is not None and resume.optimizer is not None:
         optimizer.load_state_dict(resume.optimizer)
@@ -374,17 +379,19 @@ def main(argv: Sequence[str] | None = None) -> None:
     from lc_act.data import load_object_dataset, split_indices_by_episode
     from lc_act.model import ClipTextEncoder, LcAct, ResNetSpatial
 
+    torch.manual_seed(args.seed)
     dataset, data_stats, tasks = load_object_dataset(args.repo_id)
     val_loader = None
     if args.budget_seconds is not None:
         episodes = [int(ep) for ep in dataset.raw.hf_dataset["episode_index"]]
         train_idx, val_idx = split_indices_by_episode(episodes)
         train_set = torch.utils.data.Subset(dataset, train_idx)
-        val_set = torch.utils.data.Subset(dataset, val_idx)
-        loader = make_loader(train_set, args.batch_size, shuffle=True)
+        # Every 8th frame spans all held-out episodes; a contiguous prefix covers only one.
+        val_set = torch.utils.data.Subset(dataset, val_idx[::8])
+        loader = make_loader(train_set, args.batch_size, shuffle=True, workers=args.workers)
         val_loader = make_loader(val_set, args.batch_size, shuffle=False)
     else:
-        loader = make_loader(dataset, args.batch_size)
+        loader = make_loader(dataset, args.batch_size, workers=args.workers)
     if args.resume is not None:
         model, stats, checkpoint = load_resume(args.resume, device)
         _run_training(
