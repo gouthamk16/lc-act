@@ -45,7 +45,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-BASE_LR = 3e-4
+BASE_LR = 6e-4
 WARMUP_FRAC = 0.02
 
 
