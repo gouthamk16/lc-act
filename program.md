@@ -3,8 +3,9 @@
 This is an experiment to have the LLM do its own research on LC-ACT.
 
 LC-ACT is a small language-conditioned action-chunking transformer for
-LIBERO-Object (Franka in MuJoCo). Overnight 20-epoch training reached train L1
-~0.099 and still **0/10** soup success. The 5-minute keep metric is
+LIBERO-Object (Franka in MuJoCo). Early soup results of 0/10 came from an eval
+bug (each action was executed twice); with one env step per action the 3-epoch
+champion scores 10/10. The 5-minute keep metric is
 **validation L1** on a held-out episode split. Each val line also reports
 **raw L1** (denormalized env units) and **grip** (gripper sign match after
 invert) so a z-scored L1 win that would fail soup can be rejected. Do not run

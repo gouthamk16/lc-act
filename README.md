@@ -24,10 +24,10 @@ policy:
    (plus a type tag) and predicts a 16-step chunk of relative 7-D pose/gripper
    actions.
 
-The closed loop is **observe → predict a chunk → execute at 20 Hz → observe
-again**. The policy predicts at 10 Hz, so each action is repeated twice before
-replanning. Training uses all ten LIBERO-Object pick-and-place tasks and the
-first evaluation is the alphabet-soup task.
+The closed loop is **observe → predict a 16-step chunk → execute it one action
+per env step → observe again**. One dataset row is one env control step; the
+dataset's 10 fps is a metadata label only. Training uses all ten LIBERO-Object
+pick-and-place tasks and the first evaluation is the alphabet-soup task.
 
 More about the model architecture in [MODEL.md](MODEL.md).
 
@@ -129,3 +129,8 @@ tags:
 
 The 0/10 result does not meet the 2/10 bar. The next run is overnight training
 with position and camera tags; that checkpoint will be a new `last.pt`.
+
+2026-09-23: those 0/10 results were an eval bug. The eval repeated every action
+twice, but one dataset row is one env step. With one step per action, the
+3-epoch five-encoder/three-decoder `last.pt` scores **10/10** soup (2/10 with
+the old repeat, same checkpoint and seeds).

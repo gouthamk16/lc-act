@@ -10,7 +10,7 @@ import torch
 
 from lc_act.obs import flip_hw, pack_state
 from lc_act.train import load_checkpoint
-from lc_act.types import DATASET_FPS, ENV_FPS, NormalizeStats
+from lc_act.types import ENV_FPS, NormalizeStats
 
 TASK = "pick up the alphabet soup and place it in the basket"
 
@@ -130,27 +130,25 @@ def run_episode(
 ) -> tuple[bool, list[np.ndarray]]:
     obs = _reset_obs(env.reset(seed=seed))
     frames = [_frame_from_obs(obs, env)] if record else []
-    repeat = ENV_FPS // DATASET_FPS
     success = False
     with torch.inference_mode():
         while True:
             workspace, wrist, state = obs_to_tensors(obs, stats, device)
             actions = stats.invert_action(model(workspace, wrist, state, [TASK])[0])
+            # One dataset row is one env control step (the dataset's 10 fps is a label only).
             for action in actions:
-                action_np = action.detach().cpu().numpy()
-                for _ in range(repeat):
-                    try:
-                        result = env.step(action_np)
-                    except ValueError as error:
-                        if "executing action in terminated episode" not in str(error):
-                            raise
-                        return success, frames
-                    obs, terminated, truncated, info = _step_values(result)
-                    if record:
-                        frames.append(_frame_from_obs(obs, env))
-                    success = bool(info.get("is_success", False))
-                    if terminated or truncated or success:
-                        return success, frames
+                try:
+                    result = env.step(action.detach().cpu().numpy())
+                except ValueError as error:
+                    if "executing action in terminated episode" not in str(error):
+                        raise
+                    return success, frames
+                obs, terminated, truncated, info = _step_values(result)
+                if record:
+                    frames.append(_frame_from_obs(obs, env))
+                success = bool(info.get("is_success", False))
+                if terminated or truncated or success:
+                    return success, frames
     return success, frames
 
 

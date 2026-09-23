@@ -52,7 +52,7 @@ concat → transformer encoder (d=512, 8 heads, 4 layers, FFN 2048)
 
 Without the 2-D sine and camera tags, the encoder is permutation-invariant and cannot use patch location or which camera a token came from.
 
-**Inference:** predict 16 steps at 10 Hz, execute open-loop, replan. MuJoCo LIBERO is 20 Hz → repeat each action twice.
+**Inference:** predict 16 steps, execute open-loop one action per env step, replan. The dataset's 10 fps is a label only: its longest Object episode is 254 rows, matching openpi's 254-env-step count, so one row is one control step. Repeating each action twice (the old eval) doubled every motion: the same 3-epoch checkpoint scored 2/10 soup with the repeat and 10/10 without it.
 
 | Piece | Params | Train? |
 | --- | --- | --- |
