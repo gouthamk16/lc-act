@@ -136,6 +136,15 @@ def _as_nchw_float(images: torch.Tensor) -> torch.Tensor:
     return x
 
 
+def _random_shift(x: torch.Tensor, pad: int) -> torch.Tensor:
+    n, _, h, w = x.shape
+    padded = F.pad(x, (pad, pad, pad, pad), mode="replicate")
+    offsets = torch.randint(0, 2 * pad + 1, (n, 2)).tolist()
+    return torch.stack(
+        [padded[i, :, dy:dy + h, dx:dx + w] for i, (dy, dx) in enumerate(offsets)]
+    )
+
+
 class ResNetSpatial(nn.Module):
     def __init__(self, pretrained: bool = True) -> None:
         super().__init__()
@@ -153,6 +162,8 @@ class ResNetSpatial(nn.Module):
     def encode(self, images: torch.Tensor) -> torch.Tensor:
         x = _as_nchw_float(images).to(device=self.mean.device, dtype=self.mean.dtype)
         x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
+        if self.training:
+            x = _random_shift(x, pad=8)
         x = (x - self.mean) / self.std
         feat = self.stem(x)
         return feat.flatten(2).transpose(1, 2)
