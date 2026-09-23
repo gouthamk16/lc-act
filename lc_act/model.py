@@ -166,6 +166,7 @@ class ClipTextEncoder(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.model = CLIPTextModelWithProjection.from_pretrained(model_id)
         freeze_module(self.model)
+        self._cache: dict[str, torch.Tensor] = {}
 
     @property
     def device(self) -> torch.device:
@@ -173,8 +174,12 @@ class ClipTextEncoder(nn.Module):
 
     @torch.no_grad()
     def encode(self, texts: list[str]) -> torch.Tensor:
-        tokens = self.tokenizer(
-            texts, return_tensors="pt", padding=True, truncation=True,
-        )
-        tokens = {k: v.to(self.device) for k, v in tokens.items()}
-        return self.model(**tokens).text_embeds
+        missing = sorted(set(texts) - self._cache.keys())
+        if missing:
+            tokens = self.tokenizer(
+                missing, return_tensors="pt", padding=True, truncation=True,
+            )
+            tokens = {k: v.to(self.device) for k, v in tokens.items()}
+            for text, embed in zip(missing, self.model(**tokens).text_embeds):
+                self._cache[text] = embed
+        return torch.stack([self._cache[text] for text in texts]).to(self.device)
