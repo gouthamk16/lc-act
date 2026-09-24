@@ -18,7 +18,7 @@ To set up a new experiment, work with the user to:
 1. **Agree on a run tag**: propose a tag based on today's date (e.g. `sep15`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current main.
 3. **Read the in-scope files**: The repo is small. Read these files for full context:
-   - `README.md` — lab context and Starscream mapping.
+   - `README.md` — lab context and [Starscream](https://github.com/gouthamk16/starscream) mapping.
    - `MODEL.md` — canonical architecture card.
    - `lc_act/eval.py` — soup eval protocol (replan every step, temporal ensembling). **Do not modify.**
    - `lc_act/data.py` — LIBERO loader (Object suite by default; `--all-tasks`, `--n-obs`). **Do not modify** (frozen like Karpathy `prepare.py`).

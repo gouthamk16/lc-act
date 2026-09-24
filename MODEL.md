@@ -77,7 +77,7 @@ Older weights (`last_3epoch_5enc3dec.pt`: 512-d, 5+3 layers, 256 px, 40.6M train
 
 ## Intended use / not
 
-Learn image + language → action chunk → env. Same slot as Starscream `HoverPolicy`, different body.
+Learn image + language → action chunk → env. Same slot as [Starscream](https://github.com/gouthamk16/starscream) `HoverPolicy`, different body.
 
 Not for drone flight, OpenVLA-level generalization, or beating 98% Object.
 

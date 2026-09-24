@@ -1,12 +1,12 @@
 # LC-ACT
 
 LC-ACT is a tabletop Franka Panda arm policy in MuJoCo LIBERO. This repository
-is a **VLA research lab** for future Starscream policies: same observe → chunk
+is a **VLA research lab** for future [Starscream](https://github.com/gouthamk16/starscream) policies: same observe → chunk
 → act slot as the drone's `HoverPolicy`, different body. It is not the x500
-and not the Starscream flight stack.
+and not the [Starscream](https://github.com/gouthamk16/starscream) flight stack.
 
 GitHub: [gouthamk16/lc-act](https://github.com/gouthamk16/lc-act). In
-Starscream this repo is the `vla/` git submodule.
+[Starscream](https://github.com/gouthamk16/starscream) this repo is the `vla/` git submodule.
 
 ![Panda arm picking an object and placing it in the basket, frames left to right](assets/image.png)
 
@@ -47,7 +47,7 @@ More about the model architecture in [MODEL.md](MODEL.md).
 ## Install
 
 CUDA wheels first, then the rest. From **this repository root** (standalone
-clone of `lc-act`, or `cd vla` inside Starscream):
+clone of `lc-act`, or `cd vla` inside [Starscream](https://github.com/gouthamk16/starscream)):
 
 ```bash
 python3 -m venv .venv
@@ -59,14 +59,14 @@ pip install -e .
 
 `av` in `requirements.txt` is the PyAV video backend used by LeRobot.
 
-Starscream checkout:
+[Starscream](https://github.com/gouthamk16/starscream) checkout:
 
 ```bash
 git clone --recurse-submodules https://github.com/gouthamk16/starscream.git
 cd starscream/vla
 ```
 
-If you already cloned Starscream without submodules:
+If you already cloned [Starscream](https://github.com/gouthamk16/starscream) without submodules:
 
 ```bash
 git submodule update --init vla
@@ -122,7 +122,7 @@ python -m lc_act.eval \
 The original done bar was at least 2/10 successful soup episodes plus a
 playable `outputs/lc_act/soup_ep0.mp4`; the current weights clear it.
 
-## Mapping to Starscream
+## Mapping to [Starscream](https://github.com/gouthamk16/starscream)
 
 The tabletop mapping is the same policy slot used later by the drone:
 
