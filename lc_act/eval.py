@@ -57,7 +57,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def make_env() -> Any:
+def make_env(task_id: int = 0) -> Any:
     os.environ.setdefault("MUJOCO_GL", "egl")
     _ensure_libero_config()
     try:
@@ -67,7 +67,7 @@ def make_env() -> Any:
         suite = benchmark.get_benchmark_dict()["libero_object"]()
         return LiberoEnv(
             task_suite=suite,
-            task_id=0,
+            task_id=task_id,
             task_suite_name="libero_object",
             episode_length=280,
             obs_type="pixels_agent_pos",
@@ -130,18 +130,29 @@ def run_episode(
     device: torch.device,
     seed: int,
     record: bool = False,
+    task: str | None = None,
+    on_frame: Any = None,
+    stop: Any = None,
 ) -> tuple[bool, list[np.ndarray]]:
+    instruction = TASK if task is None else task
     obs = _reset_obs(env.reset(seed=seed))
-    frames = [_frame_from_obs(obs, env)] if record else []
+    frames = []
+    first = _frame_from_obs(obs, env)
+    if record:
+        frames.append(first)
+    if on_frame is not None:
+        on_frame(first, obs)
     history: deque[tuple[torch.Tensor, ...]] = deque(maxlen=model.n_obs)
     pending: defaultdict[int, list[torch.Tensor]] = defaultdict(list)
     with torch.inference_mode():
         # Replan every env step; one dataset row is one control step (its 10 fps is a label only).
         for step in count():
+            if stop is not None and stop():
+                return False, frames
             current = obs_to_tensors(obs, stats, device)
             history.extend([current] * (model.n_obs if not history else 1))
             workspace, wrist, state = (torch.stack(parts, dim=1) for parts in zip(*history))
-            chunk = stats.invert_action(model(workspace, wrist, state, [TASK])[0])
+            chunk = stats.invert_action(model(workspace, wrist, state, [instruction])[0])
             for offset, action in enumerate(chunk):
                 pending[step + offset].append(action)
             action = temporal_ensemble(pending.pop(step), ENSEMBLE_DECAY)
@@ -152,8 +163,11 @@ def run_episode(
                     raise
                 return False, frames
             obs, terminated, truncated, info = _step_values(result)
+            frame = _frame_from_obs(obs, env)
             if record:
-                frames.append(_frame_from_obs(obs, env))
+                frames.append(frame)
+            if on_frame is not None:
+                on_frame(frame, obs)
             success = bool(info.get("is_success", False))
             if terminated or truncated or success:
                 return success, frames
