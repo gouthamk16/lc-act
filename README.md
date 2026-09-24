@@ -67,11 +67,11 @@ MuJoCo needs EGL in the WSL GPU environment:
 export MUJOCO_GL=egl
 ```
 
-Overnight train (no wall-clock cap; writes `outputs/lc_act/last.pt` every 100
-steps, every epoch, and on Ctrl+C):
+Long train (the current weights came from this 3-hour run; the cosine learning
+rate schedule spans the `--max-hours` deadline, or `--epochs` when there is none):
 
 ```bash
-python -m lc_act.train --out outputs/lc_act --epochs 20 --batch-size 8 --max-hours 0
+python -m lc_act.train --out outputs/lc_act --max-hours 3 --epochs 999 --save-every 2000
 ```
 
 Resume after a stop or crash:
@@ -82,9 +82,9 @@ python -m lc_act.train --resume outputs/lc_act/last.pt --out outputs/lc_act --ep
 
 `--max-hours 2` is still the default if you omit the flag. `--max-hours 0`
 means no deadline. The command downloads `lerobot/libero`, fits normalization
-statistics without decoding RGB for that pass, and uses `num_workers=0` for
-the 10 GB WSL memory ceiling. If CUDA reports out of memory, rerun with
-`--batch-size 4`.
+statistics without decoding RGB for that pass, and decodes video with 6 loader
+workers (batch 16), which leaves ~3.5 GB free under the 10 GB WSL ceiling. If
+RAM runs out, lower `--workers`.
 
 Evaluate ten fixed-seed soup episodes and save episode zero:
 
@@ -134,3 +134,8 @@ with position and camera tags; that checkpoint will be a new `last.pt`.
 twice, but one dataset row is one env step. With one step per action, the
 3-epoch five-encoder/three-decoder `last.pt` scores **10/10** soup (2/10 with
 the old repeat, same checkpoint and seeds).
+
+2026-09-24: after an autoresearch pass (`artifacts/results.tsv`), a 3-hour run of
+the smaller champion (7.6M trainable, 128 px, 256-d transformer) scores **86%**
+across all ten Object tasks (5 episodes each) vs 62% for the old checkpoint,
+at 7.1 ms per chunk and 0.30 GB inference VRAM. Soup: 9/10.

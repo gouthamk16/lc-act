@@ -34,21 +34,24 @@ Rejected on this 8 GB laptop: OpenVLA-OFT 7B (25–62 GB), SmolVLA (10–16 GB),
 The PNG is a schematic. Token tagging below matches the code.
 
 ```
-workspace RGB 256×256 ──┐
-                        ├── shared ResNet-18 (trainable, no global pool)
+workspace RGB 256×256 ──┐  resize to 128×128 (train: ±8 px random shift)
+                        ├── shared ResNet-18 through layer3 (trainable)
 wrist RGB 256×256 ──────┘         │
                                   ▼
-                         8×8 spatial tokens per camera
+                         8×8 spatial tokens per camera (256-d)
                          + 2-D sinusoidal pos embed (ACT)
                          + learned camera id (workspace vs wrist)
-instruction ── frozen CLIP text ──► 1 language token + type tag
+                         FiLM (γ, β) from the language token
+instruction ── frozen CLIP text (cached per string) ──► 1 language token + type tag
 proprio 8-D ── linear ────────────► 1 state token + type tag
 
-concat → transformer encoder (d=512, 8 heads, 4 layers, FFN 2048)
-      → 16 action queries, 1-layer decoder (cross-attend)
+concat → transformer encoder (d=256, 8 heads, 3 pre-norm layers, FFN 1024)
+      → 16 action queries, 2-layer decoder (cross-attend)
       → linear → (16, 7) relative pose + gripper
       → L1 vs z-scored demo chunk
 ```
+
+Training: AdamW, 2% warmup then cosine decay from a 6e-4 peak over the run, batch 16, 6 decode workers.
 
 Without the 2-D sine and camera tags, the encoder is permutation-invariant and cannot use patch location or which camera a token came from.
 
@@ -56,14 +59,16 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 
 | Piece | Params | Train? |
 | --- | --- | --- |
-| ResNet-18 shared | 11.19M measured (v0) | yes |
-| Transformer + head | 17.36M measured (v0) | yes |
-| Camera + type tags | 2,048 (2×512 + 2×512) | yes |
+| ResNet-18 through layer3 | 2,782,784 | yes |
+| Projections, tags, FiLM, transformer, head | 4,814,087 | yes |
 | CLIP text | ~63M | frozen |
-| Trainable total | 28,541,409 (v0, no tags); +2,048 after tags | |
-| VRAM result | Batch 8 fit on RTX 4060 Laptop 8 GB (v0) | |
+| Trainable total | 7,596,871 | |
+| Train memory | 0.6 GB peak at batch 16 (RTX 4060 Laptop 8 GB) | |
+| Inference | 7.1 ms per chunk, 0.30 GB VRAM (batch 1, fp32; CLIP is most of it) | |
 
-v0 weights: `outputs/lc_act/last_nopos_3epoch.pt` (2026-09-14, 3 epochs, 0/10 soup). They will not load into this architecture. Overnight training writes a new `last.pt`.
+Current weights: `outputs/lc_act/last.pt` (2026-09-24, commit `be73e88`, 3 h / 36 epochs). Closed loop, 5 episodes × 10 Object tasks: **86%** (43/50) executing full chunks; 90% (45/50) with ACT temporal ensembling (replan every step, decay 0.01), within noise at n=50. Soup 9/10. Mean 133 env steps per success.
+
+Older weights (`last_3epoch_5enc3dec.pt`: 512-d, 5+3 layers, 256 px, 40.6M trainable) reach 62% on the same 50 episodes and do not load into this architecture.
 
 ## Data and eval
 
@@ -82,7 +87,8 @@ Not for drone flight, OpenVLA-level generalization, or beating 98% Object.
 
 - Ten short instructions: language can be ignored. Cream-cheese eval is the check.
 - If the arm overshoots, drop H to 8 before adding diffusion.
-- WSL 10 GB RAM: `num_workers=0`.
+- WSL 10 GB RAM: 6 decode workers leave ~3.5 GB free; drop `--workers` if RAM runs out.
+- Remaining failures are grasp misses on small or flat objects (cream cheese, milk) with no re-grasp: the policy finishes the memorized carry to the basket empty-handed.
 
 ## Cite
 
