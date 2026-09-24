@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections import defaultdict, deque
+from itertools import count
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -13,6 +15,7 @@ from lc_act.train import load_checkpoint
 from lc_act.types import ENV_FPS, NormalizeStats
 
 TASK = "pick up the alphabet soup and place it in the basket"
+ENSEMBLE_DECAY = 0.01
 
 
 def _ensure_libero_config() -> None:
@@ -130,26 +133,39 @@ def run_episode(
 ) -> tuple[bool, list[np.ndarray]]:
     obs = _reset_obs(env.reset(seed=seed))
     frames = [_frame_from_obs(obs, env)] if record else []
-    success = False
+    history: deque[tuple[torch.Tensor, ...]] = deque(maxlen=model.n_obs)
+    pending: defaultdict[int, list[torch.Tensor]] = defaultdict(list)
     with torch.inference_mode():
-        while True:
-            workspace, wrist, state = obs_to_tensors(obs, stats, device)
-            actions = stats.invert_action(model(workspace, wrist, state, [TASK])[0])
-            # One dataset row is one env control step (the dataset's 10 fps is a label only).
-            for action in actions:
-                try:
-                    result = env.step(action.detach().cpu().numpy())
-                except ValueError as error:
-                    if "executing action in terminated episode" not in str(error):
-                        raise
-                    return success, frames
-                obs, terminated, truncated, info = _step_values(result)
-                if record:
-                    frames.append(_frame_from_obs(obs, env))
-                success = bool(info.get("is_success", False))
-                if terminated or truncated or success:
-                    return success, frames
-    return success, frames
+        # Replan every env step; one dataset row is one control step (its 10 fps is a label only).
+        for step in count():
+            current = obs_to_tensors(obs, stats, device)
+            history.extend([current] * (model.n_obs if not history else 1))
+            workspace, wrist, state = (torch.stack(parts, dim=1) for parts in zip(*history))
+            chunk = stats.invert_action(model(workspace, wrist, state, [TASK])[0])
+            for offset, action in enumerate(chunk):
+                pending[step + offset].append(action)
+            action = temporal_ensemble(pending.pop(step), ENSEMBLE_DECAY)
+            try:
+                result = env.step(action.detach().cpu().numpy())
+            except ValueError as error:
+                if "executing action in terminated episode" not in str(error):
+                    raise
+                return False, frames
+            obs, terminated, truncated, info = _step_values(result)
+            if record:
+                frames.append(_frame_from_obs(obs, env))
+            success = bool(info.get("is_success", False))
+            if terminated or truncated or success:
+                return success, frames
+    return False, frames
+
+
+def temporal_ensemble(candidates: list[torch.Tensor], decay: float) -> torch.Tensor:
+    """ACT temporal ensembling: candidates oldest first, weighted exp(-decay * i)."""
+    ages = torch.arange(len(candidates), dtype=torch.float32, device=candidates[0].device)
+    weights = torch.exp(-decay * ages)
+    weights = weights / weights.sum()
+    return (torch.stack(candidates) * weights[:, None]).sum(0)
 
 
 def _save_video(path: Path, frames: list[np.ndarray]) -> None:
