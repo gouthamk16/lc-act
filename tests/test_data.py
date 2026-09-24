@@ -7,9 +7,11 @@ from lc_act.data import (
     ObjectVLADataset,
     collate,
     is_object_task,
+    obs_delta_timestamps,
     object_task_indices,
     pad_action_chunk,
     split_indices_by_episode,
+    task_indices,
 )
 from lc_act.types import NormalizeStats
 
@@ -102,7 +104,40 @@ def test_dataset_getitem_normalizes_and_collate_batches():
     stats = NormalizeStats.from_tensors(state.unsqueeze(0), action.unsqueeze(0))
     ds = ObjectVLADataset(raw, stats)
     batch = collate([ds[0], ds[0]])
-    assert batch.workspace.shape == (2, 256, 256, 3)
-    assert batch.state.shape == (2, 8)
+    assert batch.workspace.shape == (2, 1, 256, 256, 3)
+    assert batch.state.shape == (2, 1, 8)
     assert batch.action.shape == (2, 16, 7)
     assert torch.allclose(batch.action, torch.zeros_like(batch.action), atol=1e-5)
+
+
+def test_dataset_keeps_stacked_history_frames_oldest_first():
+    frames = torch.stack([torch.zeros(256, 256, 3), torch.full((256, 256, 3), 255.0)]).to(torch.uint8)
+    state = torch.stack([torch.zeros(8), torch.ones(8)])
+    raw = _FakeRaw([
+        {
+            "observation.images.image": frames,
+            "observation.images.image2": frames,
+            "observation.state": state,
+            "action": torch.zeros(16, 7),
+            "task": "pick up the alphabet soup and place it in the basket",
+        }
+    ])
+    stats = NormalizeStats.from_tensors(torch.zeros(1, 8), torch.zeros(1, 16, 7))
+    sample = ObjectVLADataset(raw, stats)[0]
+    assert sample.workspace.shape == (2, 256, 256, 3)
+    assert sample.workspace[1].float().mean() == 255
+    assert sample.state.shape == (2, 8)
+
+
+def test_obs_delta_timestamps_end_at_current_frame():
+    assert obs_delta_timestamps(1) == [0.0]
+    assert obs_delta_timestamps(2) == [-0.1, 0.0]
+
+
+def test_task_indices_all_tasks_keeps_every_suite():
+    mapping = {
+        "pick up the alphabet soup and place it in the basket": 17,
+        "pick up the black bowl and place it on the plate": 3,
+    }
+    assert task_indices(mapping, all_tasks=True) == {3, 17}
+    assert task_indices(mapping, all_tasks=False) == {17}

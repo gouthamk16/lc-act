@@ -5,7 +5,7 @@ from typing import Any
 
 import torch
 
-from lc_act.types import ACTION_DIM, DATASET_FPS, HORIZON, Batch, NormalizeStats
+from lc_act.types import ACTION_DIM, DATASET_FPS, HORIZON, STATE_DIM, Batch, NormalizeStats
 
 _OBJECT_TASK = re.compile(
     r"^pick up the .+ and place it in the basket$",
@@ -19,6 +19,12 @@ def is_object_task(instruction: str) -> bool:
 
 def object_task_indices(task_to_index: dict[str, int]) -> set[int]:
     return {idx for task, idx in task_to_index.items() if is_object_task(task)}
+
+
+def task_indices(task_to_index: dict[str, int], all_tasks: bool) -> set[int]:
+    if all_tasks:
+        return set(task_to_index.values())
+    return object_task_indices(task_to_index)
 
 
 def split_indices_by_episode(
@@ -57,6 +63,10 @@ def action_delta_timestamps(horizon: int = HORIZON, fps: int = DATASET_FPS) -> l
     return [i * (1.0 / fps) for i in range(horizon)]
 
 
+def obs_delta_timestamps(n_obs: int, fps: int = DATASET_FPS) -> list[float]:
+    return [round(-(n_obs - 1 - i) / fps, 6) for i in range(n_obs)]
+
+
 @dataclass
 class Sample:
     workspace: torch.Tensor
@@ -64,6 +74,14 @@ class Sample:
     state: torch.Tensor
     action: torch.Tensor
     task: str
+
+
+def _frames_uint8(frames: Any) -> torch.Tensor:
+    """(T, H, W, 3) uint8, oldest frame first; a single (H, W, 3) or (3, H, W) frame gets T=1."""
+    frames = torch.as_tensor(frames)
+    if frames.ndim == 3:
+        frames = frames.unsqueeze(0)
+    return torch.stack([_hwc_uint8(frame) for frame in frames])
 
 
 def _hwc_uint8(image: Any) -> torch.Tensor:
@@ -104,10 +122,10 @@ class ObjectVLADataset(torch.utils.data.Dataset):
         row = self.raw[index]
         task = row["task"] if isinstance(row["task"], str) else row["task"][0]
         return Sample(
-            workspace=_hwc_uint8(row["observation.images.image"]),
-            wrist=_hwc_uint8(row["observation.images.image2"]),
+            workspace=_frames_uint8(row["observation.images.image"]),
+            wrist=_frames_uint8(row["observation.images.image2"]),
             state=self.stats.apply_state(
-                torch.as_tensor(row["observation.state"]).float()
+                torch.as_tensor(row["observation.state"]).float().reshape(-1, STATE_DIM)
             ),
             action=self.stats.apply_action(
                 _action_chunk(row["action"], self.horizon).float()
@@ -180,9 +198,12 @@ def _raw_object_subset(
     return sorted(episodes), states, actions
 
 
-def load_object_dataset(
+def load_libero_dataset(
     repo_id: str = "lerobot/libero",
+    all_tasks: bool = False,
+    n_obs: int = 1,
 ) -> tuple[ObjectVLADataset, NormalizeStats, list[str]]:
+    """Object-suite subset by default; all_tasks trains on every LIBERO suite."""
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 
@@ -193,9 +214,13 @@ def load_object_dataset(
         raise
 
     mapping = _task_to_index(meta)
-    allowed = object_task_indices(mapping)
+    allowed = task_indices(mapping, all_tasks)
     if not allowed:
-        raise RuntimeError(f"no Object-suite tasks in {repo_id}")
+        raise RuntimeError(f"no matching tasks in {repo_id}")
+    delta_timestamps = {"action": action_delta_timestamps()}
+    if n_obs > 1:
+        for key in ("observation.images.image", "observation.images.image2", "observation.state"):
+            delta_timestamps[key] = obs_delta_timestamps(n_obs)
 
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -210,7 +235,7 @@ def load_object_dataset(
         raw = LeRobotDataset(
             repo_id,
             episodes=episodes,
-            delta_timestamps={"action": action_delta_timestamps()},
+            delta_timestamps=delta_timestamps,
             video_backend="pyav",
         )
     except Exception as error:

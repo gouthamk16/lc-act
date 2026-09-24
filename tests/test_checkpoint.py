@@ -8,7 +8,7 @@ from lc_act.types import CLIP_DIM, RESNET_DIM, Checkpoint, NormalizeStats
 
 
 class FakeVision(nn.Module):
-    def encode(self, images: torch.Tensor) -> torch.Tensor:
+    def encode(self, images: torch.Tensor, size: int = 0, group: int = 1) -> torch.Tensor:
         return torch.zeros(images.shape[0], 4, RESNET_DIM, device=images.device)
 
 
@@ -34,12 +34,22 @@ def test_checkpoint_roundtrip_keeps_epoch_step_optimizer():
         step=50,
         optimizer={"lr": 1e-4},
         scaler={"scale": 2.0},
+        n_obs=2,
     )
     restored = Checkpoint.from_payload(checkpoint.to_payload())
     assert restored.epoch == 3
     assert restored.step == 50
     assert restored.optimizer == {"lr": 1e-4}
     assert restored.scaler == {"scale": 2.0}
+    assert restored.n_obs == 2
+
+
+def test_checkpoint_without_n_obs_is_single_frame():
+    payload = Checkpoint(
+        trainable={}, stats=_stats(), horizon=16, tasks=["soup"],
+    ).to_payload()
+    del payload["n_obs"]
+    assert Checkpoint.from_payload(payload).n_obs == 1
 
 
 def test_load_trainable_rejects_missing_camera_embed():
@@ -59,3 +69,9 @@ def test_budget_seconds_and_val_batches_parse():
     args = parse_args(["--budget-seconds", "300", "--val-batches", "4"])
     assert args.budget_seconds == 300.0
     assert args.val_batches == 4
+
+
+def test_all_tasks_and_n_obs_parse():
+    args = parse_args(["--all-tasks", "--n-obs", "2"])
+    assert args.all_tasks
+    assert args.n_obs == 2

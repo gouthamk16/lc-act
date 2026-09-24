@@ -42,6 +42,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--val-batches", type=int, default=200)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--all-tasks", action="store_true", help="train on all 40 LIBERO tasks")
+    parser.add_argument("--n-obs", type=int, default=1, help="observation frames per sample")
     return parser.parse_args(argv)
 
 
@@ -253,6 +255,7 @@ def save_checkpoint(
         step=step,
         optimizer=optimizer.state_dict(),
         scaler=scaler.state_dict(),
+        n_obs=model.n_obs,
     )
     _atomic_torch_save(path, checkpoint.to_payload())
 
@@ -276,6 +279,7 @@ def _model_from_checkpoint(
         ResNetSpatial(pretrained=False),
         ClipTextEncoder(),
         horizon=checkpoint.horizon,
+        n_obs=checkpoint.n_obs,
     )
     load_trainable(model, checkpoint.trainable)
     return model.to(device), _stats_on_device(checkpoint.stats, device)
@@ -407,11 +411,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     if device.type == "cpu" and args.epochs != 1:
         raise RuntimeError("real training requires CUDA; use --epochs 1 for CPU smoke")
 
-    from lc_act.data import load_object_dataset, split_indices_by_episode
+    from lc_act.data import load_libero_dataset, split_indices_by_episode
     from lc_act.model import ClipTextEncoder, LcAct, ResNetSpatial
 
     torch.manual_seed(args.seed)
-    dataset, data_stats, tasks = load_object_dataset(args.repo_id)
+    dataset, data_stats, tasks = load_libero_dataset(args.repo_id, args.all_tasks, args.n_obs)
     val_loader = None
     if args.budget_seconds is not None:
         episodes = [int(ep) for ep in dataset.raw.hf_dataset["episode_index"]]
@@ -425,13 +429,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         loader = make_loader(dataset, args.batch_size, workers=args.workers)
     if args.resume is not None:
         model, stats, checkpoint = load_resume(args.resume, device)
+        if checkpoint.n_obs != args.n_obs:
+            raise RuntimeError(f"checkpoint has n_obs={checkpoint.n_obs}; pass --n-obs {checkpoint.n_obs}")
         _run_training(
             args, model, loader, stats, checkpoint.tasks, device,
             start_epoch=checkpoint.epoch, start_step=checkpoint.step,
             resume=checkpoint, val_loader=val_loader,
         )
         return
-    model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder()).to(device)
+    model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder(), n_obs=args.n_obs).to(device)
     _run_training(args, model, loader, data_stats, tasks, device, val_loader=val_loader)
 
 

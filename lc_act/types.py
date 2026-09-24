@@ -58,6 +58,7 @@ class Checkpoint:
     step: int = 0
     optimizer: dict[str, Any] | None = None
     scaler: dict[str, Any] | None = None
+    n_obs: int = 1
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -74,6 +75,7 @@ class Checkpoint:
             "step": self.step,
             "optimizer": self.optimizer,
             "scaler": self.scaler,
+            "n_obs": self.n_obs,
         }
 
     @classmethod
@@ -96,6 +98,7 @@ class Checkpoint:
             step=int(payload.get("step", 0)),
             optimizer=payload.get("optimizer"),
             scaler=payload.get("scaler"),
+            n_obs=int(payload.get("n_obs", 1)),
         )
 
 
