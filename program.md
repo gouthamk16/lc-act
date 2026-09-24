@@ -20,8 +20,8 @@ To set up a new experiment, work with the user to:
 3. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `README.md` — lab context and Starscream mapping.
    - `MODEL.md` — canonical architecture card.
-   - `lc_act/eval.py` — soup eval protocol. **Do not modify.**
-   - `lc_act/data.py` — Object-suite loader. **Do not modify** (frozen like Karpathy `prepare.py`).
+   - `lc_act/eval.py` — soup eval protocol (replan every step, temporal ensembling). **Do not modify.**
+   - `lc_act/data.py` — LIBERO loader (Object suite by default; `--all-tasks`, `--n-obs`). **Do not modify** (frozen like Karpathy `prepare.py`).
    - `lc_act/train.py` / `lc_act/model.py` / `lc_act/posenc.py` / `lc_act/types.py` — the files you modify.
 4. **Verify data exists**: HuggingFace `lerobot/libero` should already be cached from prior trains. If load fails, tell the human.
 5. **Initialize results.tsv**: Create `artifacts/results.tsv` with just the header row. The baseline will be recorded after the first run.

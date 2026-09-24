@@ -55,7 +55,7 @@ Training: AdamW, 2% warmup then cosine decay from a 6e-4 peak over the run, batc
 
 Without the 2-D sine and camera tags, the encoder is permutation-invariant and cannot use patch location or which camera a token came from.
 
-**Inference:** predict 16 steps, execute open-loop one action per env step, replan. The dataset's 10 fps is a label only: its longest Object episode is 254 rows, matching openpi's 254-env-step count, so one row is one control step. Repeating each action twice (the old eval) doubled every motion: the same 3-epoch checkpoint scored 2/10 soup with the repeat and 10/10 without it.
+**Inference:** replan every env step and execute the ACT temporal ensemble (decay 0.01, older predictions weigh more) of all chunks covering that step. At 7 ms per call this fits a 20 Hz loop. With `--n-obs 2` the model also sees the previous frame and state; at episode start the first frame is repeated, as in training. The dataset's 10 fps is a label only: its longest Object episode is 254 rows, matching openpi's 254-env-step count, so one row is one control step. Repeating each action twice (the old eval) doubled every motion: the same 3-epoch checkpoint scored 2/10 soup with the repeat and 10/10 without it.
 
 | Piece | Params | Train? |
 | --- | --- | --- |
@@ -66,7 +66,7 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 | Train memory | 0.6 GB peak at batch 16 (RTX 4060 Laptop 8 GB) | |
 | Inference | 7.1 ms per chunk, 0.30 GB VRAM (batch 1, fp32; CLIP is most of it) | |
 
-Current weights: `outputs/lc_act/last.pt` (2026-09-24, commit `be73e88`, 3 h / 36 epochs). Closed loop, 5 episodes × 10 Object tasks: **86%** (43/50) executing full chunks; 90% (45/50) with ACT temporal ensembling (replan every step, decay 0.01), within noise at n=50. Soup 9/10. Mean 133 env steps per success.
+Current weights: `outputs/lc_act/last.pt` (2026-09-24, commit `be73e88`, Object suite only, single frame, 3 h / 36 epochs). Closed loop over 10 Object tasks: **95%** (95/100, 10 episodes per task) with temporal ensembling; 86% (43/50, 5 per task) executing full 16-step chunks open-loop. Mean 135 env steps per success.
 
 Older weights (`last_3epoch_5enc3dec.pt`: 512-d, 5+3 layers, 256 px, 40.6M trainable) reach 62% on the same 50 episodes and do not load into this architecture.
 
