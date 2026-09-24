@@ -8,26 +8,39 @@ and not the Starscream flight stack.
 GitHub: [gouthamk16/lc-act](https://github.com/gouthamk16/lc-act). In
 Starscream this repo is the `vla/` git submodule.
 
-![LC-ACT model](assets/lcact-model.png)
+![Panda arm picking an object and placing it in the basket, frames left to right](assets/image.png)
+
+*Closed-loop LIBERO-Object rollout: reach, grasp, carry, and release into the
+basket (frames left to right).*
 
 ## The observe-to-act loop
 
 The model has the same three boxes as any small vision-language-action (VLA)
 policy:
 
-1. **Vision**: a shared trainable ResNet-18 turns workspace and wrist images
-   into spatial tokens. Each token gets an ACT-style 2-D sinusoidal position
-   embedding plus a learned camera id (workspace vs wrist).
-2. **Language**: frozen CLIP text turns the instruction into a language token
-   (plus a learned type tag).
-3. **Action**: a transformer combines those tokens with the 8-D robot state
-   (plus a type tag) and predicts a 16-step chunk of relative 7-D pose/gripper
-   actions.
+1. **Vision**: workspace and wrist images are resized to 128×128 and encoded by
+   a shared, trainable ResNet-18 cut after layer3 into an 8×8 grid of tokens
+   per camera. Each token gets an ACT-style 2-D sinusoidal position embedding,
+   a learned camera id (workspace vs wrist), and FiLM modulation from the
+   instruction.
+2. **Language**: frozen CLIP text turns the instruction into one language
+   token (plus a learned type tag). Embeddings are cached per instruction
+   string.
+3. **Action**: a small transformer (width 256, 3 encoder and 2 decoder layers)
+   combines those tokens with the 8-D robot state (plus a type tag) and
+   predicts a 16-step chunk of relative 7-D pose/gripper actions.
 
-The closed loop is **observe → predict a 16-step chunk → execute it one action
-per env step → observe again**. One dataset row is one env control step; the
-dataset's 10 fps is a metadata label only. Training uses all ten LIBERO-Object
-pick-and-place tasks and the first evaluation is the alphabet-soup task.
+The closed loop is **observe → predict a 16-step chunk → execute one action →
+observe again**. The policy replans every env step and executes the ACT
+temporal ensemble of every chunk that covers that step. One dataset row is one
+env control step; the dataset's 10 fps is a metadata label only.
+
+By default training uses the ten LIBERO-Object pick-and-place tasks.
+`--all-tasks` trains on all 40 LIBERO tasks, and `--n-obs 2` adds the previous
+frame and state to each observation. Evaluation is on LIBERO-Object.
+
+The trainable model is 7.6M parameters. Inference takes 7.1 ms per chunk and
+0.30 GB VRAM on an RTX 4060 Laptop, most of it the frozen CLIP text encoder.
 
 More about the model architecture in [MODEL.md](MODEL.md).
 
@@ -67,14 +80,24 @@ MuJoCo needs EGL in the WSL GPU environment:
 export MUJOCO_GL=egl
 ```
 
-Long train (the current weights came from this 3-hour run; the cosine learning
-rate schedule spans the `--max-hours` deadline, or `--epochs` when there is none):
+Long train. The current weights came from this 3-hour run; the cosine learning
+rate schedule spans the `--max-hours` deadline, or `--epochs` when there is
+none:
 
 ```bash
 python -m lc_act.train --out outputs/lc_act --max-hours 3 --epochs 999 --save-every 2000
 ```
 
-Resume after a stop or crash:
+All 40 LIBERO tasks with two-frame history (not yet evaluated; the all-task
+startup pass over 273k rows takes a few minutes before training begins):
+
+```bash
+python -u -m lc_act.train --all-tasks --n-obs 2 --max-hours 6 --epochs 999 \
+  --save-every 2000 --out outputs/lc_act_all40_hist
+```
+
+Resume after a stop or crash (pass the same `--n-obs` the checkpoint was
+trained with):
 
 ```bash
 python -m lc_act.train --resume outputs/lc_act/last.pt --out outputs/lc_act --epochs 20 --max-hours 0
@@ -96,8 +119,8 @@ python -m lc_act.eval \
   --video outputs/lc_act/soup_ep0.mp4
 ```
 
-The success criterion is **at least 2/10** successful soup episodes and an
-existing playable `outputs/lc_act/soup_ep0.mp4`.
+The original done bar was at least 2/10 successful soup episodes plus a
+playable `outputs/lc_act/soup_ep0.mp4`; the current weights clear it.
 
 ## Mapping to Starscream
 
@@ -113,29 +136,27 @@ integration.
 
 ## Results
 
-Measured 2026-09-14 on an RTX 4060 Laptop (8 GB), **before** spatial/camera
-tags:
+Current weights: `outputs/lc_act/last.pt` (commit `be73e88`; Object suite,
+single frame, 3-hour run on an RTX 4060 Laptop 8 GB).
 
-- Training used batch 8 with both cameras and fit the GPU. The two-hour CLI
-  cap stopped the run after epochs 0–2.
-- Epoch logs: `epoch=0 l1=0.3980 samples/s=26.7`,
-  `epoch=1 l1=0.3325 samples/s=47.1`, and
-  `epoch=2 l1=0.2899 samples/s=19.1`.
-- Evaluation result: `successes=0/10`.
-- Video: `outputs/lc_act/soup_ep0.mp4` exists, is readable H.264, 256×256,
-  20 FPS, and about 49.6 seconds long.
-- Weights kept as `outputs/lc_act/last_nopos_3epoch.pt` (28,541,409 trainable
-  parameters). They do not load into the tagged architecture.
+| Eval (10 LIBERO-Object tasks) | Success |
+| --- | --- |
+| Replan every step + temporal ensembling (10 episodes per task) | **95%** (95/100) |
+| Open-loop 16-step chunks (5 episodes per task) | 86% (43/50) |
+| Previous 40.6M-parameter checkpoint, open-loop (5 per task) | 62% (31/50) |
 
-The 0/10 result does not meet the 2/10 bar. The next run is overnight training
-with position and camera tags; that checkpoint will be a new `last.pt`.
+Successful episodes take 135 env steps on average. The remaining failures are
+grasp misses on small or flat objects (cream cheese, milk); the policy then
+carries nothing to the basket instead of re-grasping. The autoresearch log
+behind this model is `artifacts/results.tsv`.
 
-2026-09-23: those 0/10 results were an eval bug. The eval repeated every action
-twice, but one dataset row is one env step. With one step per action, the
-3-epoch five-encoder/three-decoder `last.pt` scores **10/10** soup (2/10 with
-the old repeat, same checkpoint and seeds).
+History:
 
-2026-09-24: after an autoresearch pass (`artifacts/results.tsv`), a 3-hour run of
-the smaller champion (7.6M trainable, 128 px, 256-d transformer) scores **86%**
-across all ten Object tasks (5 episodes each) vs 62% for the old checkpoint,
-at 7.1 ms per chunk and 0.30 GB inference VRAM. Soup: 9/10.
+- 2026-09-14: the first model (28.5M trainable, 3 epochs) scored 0/10 soup.
+- 2026-09-23: that 0/10, and later 0/10 results, came from an eval bug. The
+  eval executed every action twice, but one dataset row is one env step. With
+  one step per action, the 3-epoch five-encoder/three-decoder checkpoint scores
+  10/10 soup (2/10 with the old repeat, same checkpoint and seeds).
+- 2026-09-24: an autoresearch pass shrank the model to 7.6M trainable
+  parameters (128 px, 256-wide transformer) while raising all-task success from
+  62% to 86% open-loop, and 95% with temporal ensembling.
