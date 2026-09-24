@@ -8,6 +8,10 @@ and not the [Starscream](https://github.com/gouthamk16/starscream) flight stack.
 GitHub: [gouthamk16/lc-act](https://github.com/gouthamk16/lc-act). In
 [Starscream](https://github.com/gouthamk16/starscream) this repo is the `vla/` git submodule.
 
+https://github.com/user-attachments/assets/9feb41c1-1167-4c94-8cdf-37dc87565e42
+
+*A closed-loop demo of the trained policy.*
+
 ![Panda arm picking an object and placing it in the basket, frames left to right](assets/image.png)
 
 *Closed-loop LIBERO-Object rollout: reach, grasp, carry, and release into the
@@ -121,6 +125,18 @@ python -m lc_act.eval \
 
 The original done bar was at least 2/10 successful soup episodes plus a
 playable `outputs/lc_act/soup_ep0.mp4`; the current weights clear it.
+
+Watch the trained policy in a browser. This loads `outputs/lc_act/last.pt`
+(the Object-suite run) and streams the simulator cameras. No MuJoCo window:
+WSL renders headlessly, and the page shows those frames. Buttons run the ten
+trained instructions. A typed sentence is passed through as written, and the
+object name in it selects which of those ten scenes to load.
+
+```bash
+python -m lc_act.live
+```
+
+Then open http://127.0.0.1:8765.
 
 ## Mapping to [Starscream](https://github.com/gouthamk16/starscream)
 
