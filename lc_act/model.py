@@ -169,7 +169,8 @@ class ResNetSpatial(nn.Module):
 
     def encode(self, images: torch.Tensor, group: int = 1) -> torch.Tensor:
         x = _as_nchw_float(images).to(device=self.mean.device, dtype=self.mean.dtype)
-        x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
+        if x.shape[-1] != VISION_SIZE:
+            x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
         if self.training:
             x = _random_shift(x, pad=8, group=group)
         x = (x - self.mean) / self.std

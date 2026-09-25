@@ -30,19 +30,19 @@ class StopFlag:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train LC-ACT on LIBERO-Object")
+    parser = argparse.ArgumentParser(description="Train LC-ACT on LIBERO")
     parser.add_argument("--out", type=Path, default=Path("outputs/lc_act"))
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-hours", type=float, default=2)
     parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--resume", type=Path, default=None)
-    parser.add_argument("--repo-id", default="lerobot/libero")
+    parser.add_argument("--cache", type=Path, default=None, help="frame cache dir (python -m lc_act.cache)")
     parser.add_argument("--budget-seconds", type=float, default=None)
-    parser.add_argument("--val-batches", type=int, default=200)
+    parser.add_argument("--val-batches", type=int, default=1000)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--all-tasks", action="store_true", help="train on all 40 LIBERO tasks")
+    parser.add_argument("--object-only", action="store_true", help="train on LIBERO-Object only")
     parser.add_argument("--n-obs", type=int, default=1, help="observation frames per sample")
     return parser.parse_args(argv)
 
@@ -411,22 +411,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     if device.type == "cpu" and args.epochs != 1:
         raise RuntimeError("real training requires CUDA; use --epochs 1 for CPU smoke")
 
-    from lc_act.data import load_libero_dataset, split_indices_by_episode
+    from lc_act.cache import DEFAULT_ROOT, load_cached
     from lc_act.model import ClipTextEncoder, LcAct, ResNetSpatial
 
     torch.manual_seed(args.seed)
-    dataset, data_stats, tasks = load_libero_dataset(args.repo_id, args.all_tasks, args.n_obs)
-    val_loader = None
-    if args.budget_seconds is not None:
-        episodes = [int(ep) for ep in dataset.raw.hf_dataset["episode_index"]]
-        train_idx, val_idx = split_indices_by_episode(episodes)
-        train_set = torch.utils.data.Subset(dataset, train_idx)
-        # Every 8th frame spans all held-out episodes; a contiguous prefix covers only one.
-        val_set = torch.utils.data.Subset(dataset, val_idx[::8])
-        loader = make_loader(train_set, args.batch_size, shuffle=True, workers=args.workers)
-        val_loader = make_loader(val_set, args.batch_size, shuffle=False)
-    else:
-        loader = make_loader(dataset, args.batch_size, workers=args.workers)
+    train_set, val_set, data_stats, tasks = load_cached(
+        args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs, holdout=args.budget_seconds is not None,
+    )
+    loader = make_loader(train_set, args.batch_size, shuffle=True, workers=args.workers)
+    val_loader = None if val_set is None else make_loader(val_set, 64, shuffle=False, workers=2)
     if args.resume is not None:
         model, stats, checkpoint = load_resume(args.resume, device)
         if checkpoint.n_obs != args.n_obs:

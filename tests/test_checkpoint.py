@@ -71,7 +71,8 @@ def test_budget_seconds_and_val_batches_parse():
     assert args.val_batches == 4
 
 
-def test_all_tasks_and_n_obs_parse():
-    args = parse_args(["--all-tasks", "--n-obs", "2"])
-    assert args.all_tasks
+def test_object_only_and_n_obs_parse():
+    assert not parse_args([]).object_only
+    args = parse_args(["--object-only", "--n-obs", "2"])
+    assert args.object_only
     assert args.n_obs == 2
