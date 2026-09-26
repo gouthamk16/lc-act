@@ -33,7 +33,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train LC-ACT on LIBERO")
     parser.add_argument("--out", type=Path, default=Path("outputs/lc_act"))
     parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-hours", type=float, default=2)
     parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--resume", type=Path, default=None)
@@ -47,8 +47,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-BASE_LR = 6e-4
+BASE_LR = 1.2e-3
 ALIGN_WEIGHT = 0.0
+LONG_WEIGHT = 1.0
 WARMUP_FRAC = 0.02
 
 
@@ -70,15 +71,21 @@ def make_loader(
     batch_size: int,
     shuffle: bool = True,
     workers: int = 0,
+    weights: torch.Tensor | None = None,
 ) -> DataLoader:
     from lc_act.data import collate
 
+    sampler = None
+    if weights is not None:
+        sampler = torch.utils.data.WeightedRandomSampler(weights, len(weights))
+        shuffle = False
     return DataLoader(
         dataset,
         batch_size=batch_size,
         num_workers=workers,
         collate_fn=collate,
         shuffle=shuffle,
+        sampler=sampler,
         persistent_workers=workers > 0,
     )
 
@@ -425,7 +432,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs,
         holdout=args.budget_seconds is not None, teacher=ALIGN_WEIGHT > 0,
     )
-    loader = make_loader(train_set, args.batch_size, shuffle=True, workers=args.workers)
+    # MINERVA: long-horizon demos are the scarce, hard ones; oversample them.
+    long_suite = torch.from_numpy(train_set.task_index[train_set.rows] < 10)
+    weights = None if LONG_WEIGHT == 1 else 1.0 + (LONG_WEIGHT - 1.0) * long_suite.double()
+    loader = make_loader(train_set, args.batch_size, shuffle=True, workers=args.workers, weights=weights)
     val_loader = None if val_set is None else make_loader(val_set, 64, shuffle=False, workers=2)
     if args.resume is not None:
         model, stats, checkpoint = load_resume(args.resume, device)
