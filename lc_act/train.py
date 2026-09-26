@@ -43,7 +43,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--object-only", action="store_true", help="train on LIBERO-Object only")
-    parser.add_argument("--n-obs", type=int, default=1, help="observation frames per sample")
+    parser.add_argument("--n-obs", type=int, default=2, help="observation frames per sample")
     return parser.parse_args(argv)
 
 
