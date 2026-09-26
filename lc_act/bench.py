@@ -45,6 +45,10 @@ def _observe(obs: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def _worker(conn) -> None:
+    # Under WSL2, EGL falls back to llvmpipe (~42 ms per camera); GLFW through Mesa's D3D12 driver renders on the GPU.
+    # Its frames match llvmpipe's to 0.5/255 on average.
+    if "WSL_DISTRO_NAME" in os.environ:
+        os.environ.update(MUJOCO_GL="glfw", GALLIUM_DRIVER="d3d12", MESA_D3D12_DEFAULT_ADAPTER_NAME="NVIDIA")
     os.environ.setdefault("MUJOCO_GL", "egl")
     from lc_act.eval import _ensure_libero_config
 
@@ -182,7 +186,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ckpt", type=Path, required=True)
     parser.add_argument("--suites", nargs="+", default=list(SUITE_NAMES), choices=SUITE_NAMES)
     parser.add_argument("--episodes", type=int, default=50, help="init states per task")
-    parser.add_argument("--envs", type=int, default=8)
+    parser.add_argument("--envs", type=int, default=2, help="each LIBERO env holds ~2.9 GB (MuJoCo arena)")
     parser.add_argument("--out", type=Path, default=None)
     return parser.parse_args(argv)
 
