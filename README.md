@@ -39,12 +39,14 @@ observe again**. The policy replans every env step and executes the ACT
 temporal ensemble of every chunk that covers that step. One dataset row is one
 env control step; the dataset's 10 fps is a metadata label only.
 
-By default training uses the ten LIBERO-Object pick-and-place tasks.
-`--all-tasks` trains on all 40 LIBERO tasks, and `--n-obs 2` adds the previous
-frame and state to each observation. Evaluation is on LIBERO-Object.
+Training uses all 40 tasks of the four standard LIBERO suites (Spatial,
+Object, Goal, Long) and gives the model the previous frame and state as well
+(`--n-obs 2`). During training only, the encoder also learns to predict frozen
+DINOv2 features of the current frame and of the frame one chunk ahead; those
+heads are dropped at inference. Evaluation (`lc_act.bench`) runs every task of
+all four suites, the protocol MINERVA and π₀.₅ report.
 
-The trainable model is 7.6M parameters. Inference takes 7.1 ms per chunk and
-0.30 GB VRAM on an RTX 4060 Laptop, most of it the frozen CLIP text encoder.
+The model is 7.7M parameters at inference.
 
 More about the model architecture in [MODEL.md](MODEL.md).
 
@@ -78,27 +80,23 @@ git submodule update --init vla
 
 ## Run
 
-MuJoCo needs EGL in the WSL GPU environment:
+Build the frame cache once (~25 min: decodes the AV1 videos to 128 px, then
+packs them as q95 JPEG, ~30 GB of scratch on disk and 3.6 GB kept), then the
+frozen DINOv2 targets (~15 min, 420 MB):
 
 ```bash
-export MUJOCO_GL=egl
+python -m lc_act.cache
+python -m lc_act.teacher
 ```
 
-Long train. The current weights came from this 3-hour run; the cosine learning
-rate schedule spans the `--max-hours` deadline, or `--epochs` when there is
-none:
+Long train. The cosine learning rate schedule spans the `--max-hours`
+deadline, or `--epochs` when there is none:
 
 ```bash
-python -m lc_act.train --out outputs/lc_act --max-hours 3 --epochs 999 --save-every 2000
+python -u -m lc_act.train --out outputs/lc_act_all40 --max-hours 4 --epochs 999 --save-every 2000
 ```
 
-All 40 LIBERO tasks with two-frame history (not yet evaluated; the all-task
-startup pass over 273k rows takes a few minutes before training begins):
-
-```bash
-python -u -m lc_act.train --all-tasks --n-obs 2 --max-hours 6 --epochs 999 \
-  --save-every 2000 --out outputs/lc_act_all40_hist
-```
+`--object-only` restricts training to the ten Object tasks.
 
 Resume after a stop or crash (pass the same `--n-obs` the checkpoint was
 trained with):
@@ -108,12 +106,21 @@ python -m lc_act.train --resume outputs/lc_act/last.pt --out outputs/lc_act --ep
 ```
 
 `--max-hours 2` is still the default if you omit the flag. `--max-hours 0`
-means no deadline. The command downloads `lerobot/libero`, fits normalization
-statistics without decoding RGB for that pass, and decodes video with 6 loader
-workers (batch 16), which leaves ~3.5 GB free under the 10 GB WSL ceiling. If
-RAM runs out, lower `--workers`.
+means no deadline. Training reads the frame cache with 6 loader workers at
+batch 64 (~830 samples/s, 1.7 GB VRAM). If RAM runs out, lower `--workers`.
 
-Evaluate ten fixed-seed soup episodes and save episode zero:
+Benchmark every task of the four suites (init states 0..N-1 per task, as
+MINERVA reports with N = 50). Each LIBERO env holds ~2.9 GB of RAM, so keep
+`--envs 2` on a 10 GB WSL box and do not run it next to training:
+
+```bash
+python -m lc_act.bench --ckpt outputs/lc_act_all40/last.pt --episodes 20 --out outputs/lc_act_all40/bench.json
+```
+
+`--ensemble uncertainty` weights each chunk's vote by its predicted Laplace
+scale instead of age alone.
+
+The older single-task eval runs ten fixed-seed soup episodes and saves episode zero:
 
 ```bash
 python -m lc_act.eval \
