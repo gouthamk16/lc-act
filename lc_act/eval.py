@@ -174,12 +174,19 @@ def run_episode(
     return False, frames
 
 
-def temporal_ensemble(candidates: list[torch.Tensor], decay: float) -> torch.Tensor:
-    """ACT temporal ensembling: candidates oldest first, weighted exp(-decay * i)."""
+def temporal_ensemble(
+    candidates: list[torch.Tensor], decay: float, log_scales: list[torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """ACT temporal ensembling: candidates oldest first, weighted exp(-decay * i).
+
+    With log_scales (the model's Laplace scale per candidate and dim), each weight is also divided
+    by its scale, so a confident fresh prediction outvotes an unsure old one."""
     ages = torch.arange(len(candidates), dtype=torch.float32, device=candidates[0].device)
-    weights = torch.exp(-decay * ages)
-    weights = weights / weights.sum()
-    return (torch.stack(candidates) * weights[:, None]).sum(0)
+    weights = torch.exp(-decay * ages)[:, None].expand(-1, candidates[0].shape[-1])
+    if log_scales is not None:
+        weights = weights * torch.exp(-torch.stack(log_scales).float())
+    weights = weights / weights.sum(0)
+    return (torch.stack(candidates) * weights).sum(0)
 
 
 def _save_video(path: Path, frames: list[np.ndarray]) -> None:

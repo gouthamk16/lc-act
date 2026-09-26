@@ -95,6 +95,8 @@ class LcAct(nn.Module):
         self.encoder = _make_encoder(d_model, n_heads, ffn_dim, n_encoder_layers)
         self.decoder = _make_decoder(d_model, n_heads, ffn_dim, n_decoder_layers)
         self.action_head = nn.Linear(d_model, ACTION_DIM)
+        # Laplace log-scale per action dim, fit on detached features so it never changes the actions.
+        self.scale_head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, ACTION_DIM))
         self.film = nn.Linear(d_model, 2 * d_model)
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
@@ -107,9 +109,10 @@ class LcAct(nn.Module):
         wrist: torch.Tensor,
         state: torch.Tensor,
         tasks: list[str],
-    ) -> torch.Tensor:
+        with_scale: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Images (B, T, H, W, 3) and state (B, T, 8), oldest frame first, T = n_obs."""
-        return self.decode(self.encode(workspace, wrist, state, tasks))
+        return self.decode(self.encode(workspace, wrist, state, tasks), with_scale)
 
     def encode(
         self,
@@ -125,9 +128,15 @@ class LcAct(nn.Module):
         st = self.state_proj(state.flatten(1)).unsqueeze(1) + self.type_embed[1]
         return self.encoder(torch.cat([ws, wr, tx, st], dim=1))
 
-    def decode(self, memory: torch.Tensor) -> torch.Tensor:
+    def decode(
+        self, memory: torch.Tensor, with_scale: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         queries = self.action_queries.unsqueeze(0).expand(memory.shape[0], -1, -1)
-        return self.action_head(self.decoder(queries, memory))
+        hidden = self.decoder(queries, memory)
+        actions = self.action_head(hidden)
+        if not with_scale:
+            return actions
+        return actions, self.scale_head(hidden.detach())
 
     def teacher_prediction(self, memory: torch.Tensor) -> torch.Tensor:
         """(B, 2 times, 2 cameras, TEACHER_DIM) from each camera's mean-pooled encoder tokens."""

@@ -112,8 +112,11 @@ def _train_batch(
     autocast = torch.autocast("cuda") if device.type == "cuda" else nullcontext()
     with autocast:
         memory = model.encode(batch.workspace, batch.wrist, batch.state, batch.tasks)
-        l1 = F.l1_loss(model.decode(memory), batch.action)
-        loss = l1
+        prediction, log_scale = model.decode(memory, with_scale=True)
+        error = (prediction - batch.action).abs()
+        l1 = error.mean()
+        # Laplace NLL on the detached residual: trains only the scale head.
+        loss = l1 + (error.detach() * torch.exp(-log_scale) + log_scale).mean()
         if batch.teacher is not None:
             predicted = model.teacher_prediction(memory).float()
             loss = loss + ALIGN_WEIGHT * (1 - F.cosine_similarity(predicted, batch.teacher, dim=-1)).mean()

@@ -35,6 +35,7 @@ class Episode:
     max_steps: int
     history: deque = field(default_factory=deque)
     pending: defaultdict = field(default_factory=lambda: defaultdict(list))
+    scales: defaultdict = field(default_factory=lambda: defaultdict(list))
     step: int = 0
 
 
@@ -89,7 +90,9 @@ def _worker(conn) -> None:
         env.close()
 
 
-def _act(model, stats, episodes: dict[int, Episode], observations: dict[int, tuple], device) -> dict[int, np.ndarray]:
+def _act(
+    model, stats, episodes: dict[int, Episode], observations: dict[int, tuple], device, uncertainty: bool,
+) -> dict[int, np.ndarray]:
     ids = list(observations)
     for i in ids:
         episode = episodes[i]
@@ -104,17 +107,27 @@ def _act(model, stats, episodes: dict[int, Episode], observations: dict[int, tup
         torch.stack([torch.stack(f[k]) for f in frames]).to(device) for k in range(3)
     )
     with torch.inference_mode():
-        chunks = stats.invert_action(model(workspace, wrist, state, [episodes[i].instruction for i in ids]))
+        chunks, log_scales = model(
+            workspace, wrist, state, [episodes[i].instruction for i in ids], with_scale=True,
+        )
+        chunks = stats.invert_action(chunks)
     actions = {}
-    for i, chunk in zip(ids, chunks):
+    for i, chunk, log_scale in zip(ids, chunks, log_scales):
         episode = episodes[i]
         for offset, action in enumerate(chunk):
             episode.pending[episode.step + offset].append(action)
-        actions[i] = temporal_ensemble(episode.pending.pop(episode.step), ENSEMBLE_DECAY).cpu().numpy()
+            episode.scales[episode.step + offset].append(log_scale[offset])
+        scales = episode.scales.pop(episode.step)
+        ensembled = temporal_ensemble(
+            episode.pending.pop(episode.step), ENSEMBLE_DECAY, scales if uncertainty else None,
+        )
+        actions[i] = ensembled.cpu().numpy()
     return actions
 
 
-def run_benchmark(model, stats, jobs: list[Job], n_envs: int, device: torch.device, log=print) -> dict[Job, tuple[bool, int]]:
+def run_benchmark(
+    model, stats, jobs: list[Job], n_envs: int, device: torch.device, uncertainty: bool = False, log=print,
+) -> dict[Job, tuple[bool, int]]:
     ctx = mp.get_context("spawn")
     pipes, procs = [], []
     for _ in range(min(n_envs, len(jobs))):
@@ -143,7 +156,7 @@ def run_benchmark(model, stats, jobs: list[Job], n_envs: int, device: torch.devi
         for i in range(len(pipes)):
             start(i)
         while observations:
-            actions = _act(model, stats, episodes, observations, device)
+            actions = _act(model, stats, episodes, observations, device, uncertainty)
             for i, action in actions.items():
                 pipes[i].send(("step", action))
             for i in list(actions):
@@ -187,6 +200,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--suites", nargs="+", default=list(SUITE_NAMES), choices=SUITE_NAMES)
     parser.add_argument("--episodes", type=int, default=50, help="init states per task")
     parser.add_argument("--envs", type=int, default=2, help="each LIBERO env holds ~2.9 GB (MuJoCo arena)")
+    parser.add_argument("--ensemble", choices=("decay", "uncertainty"), default="decay")
     parser.add_argument("--out", type=Path, default=None)
     return parser.parse_args(argv)
 
@@ -199,7 +213,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     model, stats = load_checkpoint(args.ckpt, device)
     jobs = [Job(suite, task, init) for suite in args.suites for task in range(10) for init in range(args.episodes)]
     started = time.monotonic()
-    summary = summarize(run_benchmark(model, stats, jobs, args.envs, device))
+    results = run_benchmark(model, stats, jobs, args.envs, device, args.ensemble == "uncertainty")
+    summary = summarize(results)
     summary["minutes"] = round((time.monotonic() - started) / 60, 1)
     print(json.dumps({k: v for k, v in summary.items() if k != "tasks"}, indent=1))
     if args.out is not None:
