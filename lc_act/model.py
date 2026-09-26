@@ -192,7 +192,8 @@ class ResNetSpatial(nn.Module):
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         net = resnet18(weights=weights)
         # Through layer3: at 128 px this is an 8x8 grid without layer4's 8.4M params.
-        self.stem = nn.Sequential(*list(net.children())[:-3])
+        # channels_last: 2.2x faster fp16 convs on Ada (157 -> 70 ms per batch-64 step).
+        self.stem = nn.Sequential(*list(net.children())[:-3]).to(memory_format=torch.channels_last)
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
         self.register_buffer("mean", mean)
@@ -204,7 +205,7 @@ class ResNetSpatial(nn.Module):
             x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
         if self.training:
             x = _random_shift(x, pad=8, group=group)
-        x = (x - self.mean) / self.std
+        x = ((x - self.mean) / self.std).contiguous(memory_format=torch.channels_last)
         feat = self.stem(x)
         return feat.flatten(2).transpose(1, 2)
 
