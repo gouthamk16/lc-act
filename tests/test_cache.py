@@ -3,7 +3,7 @@ import json
 import numpy as np
 import torch
 
-from lc_act.cache import CachedLibero, episode_bounds, load_cached, split_by_task, suite_of
+from lc_act.cache import CachedLibero, episode_bounds, load_cached, pack, split_by_task, suite_of
 from lc_act.types import VISION_SIZE
 
 
@@ -31,13 +31,14 @@ def _fake_cache(root, episodes):
     rows = len(episodes)
     for name in ("workspace", "wrist"):
         images = np.memmap(root / f"{name}.u8", np.uint8, "w+", shape=(rows, VISION_SIZE, VISION_SIZE, 3))
-        images[:] = np.arange(rows, dtype=np.uint8)[:, None, None, None]
+        images[:] = (np.arange(rows, dtype=np.uint8) * 10)[:, None, None, None]
         images.flush()
     np.save(root / "state.npy", np.arange(rows * 8, dtype=np.float32).reshape(rows, 8))
     np.save(root / "action.npy", np.arange(rows * 7, dtype=np.float32).reshape(rows, 7))
     np.save(root / "episode_index.npy", np.array(episodes))
     np.save(root / "task_index.npy", np.array([24] * rows))
     (root / "tasks.json").write_text(json.dumps([f"task {i}" for i in range(40)]))
+    pack(root)
     (root / "meta.json").write_text(json.dumps({"rows": rows}))
 
 
@@ -46,10 +47,10 @@ def test_cached_sample_clamps_history_and_pads_chunk_within_episode(tmp_path):
     train, _, stats, _ = load_cached(tmp_path, n_obs=2)
     data = CachedLibero(tmp_path, np.array([3, 5]), stats, train.tasks, n_obs=2, horizon=4)
     start = data[0]
-    assert start.workspace[:, 0, 0, 0].tolist() == [3, 3]
+    assert torch.allclose(start.workspace[:, 0, 0, 0].float(), torch.tensor([30.0, 30.0]), atol=2)
     assert start.task == "task 24"
     end = data[1]
-    assert end.wrist[:, 0, 0, 0].tolist() == [4, 5]
+    assert torch.allclose(end.wrist[:, 0, 0, 0].float(), torch.tensor([40.0, 50.0]), atol=2)
     raw = stats.invert_action(end.action)
     assert torch.allclose(raw[:, 0], torch.tensor([35.0, 35.0, 35.0, 35.0]))
 

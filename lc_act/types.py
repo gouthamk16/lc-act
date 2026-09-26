@@ -10,6 +10,7 @@ HORIZON = 16
 TOKEN_DIM = 256
 CLIP_DIM = 512
 RESNET_DIM = 256
+TEACHER_DIM = 384
 N_HEADS = 8
 N_ENCODER_LAYERS = 3
 N_DECODER_LAYERS = 2
@@ -109,3 +110,4 @@ class Batch:
     state: torch.Tensor
     action: torch.Tensor
     tasks: list[str]
+    teacher: torch.Tensor | None = None

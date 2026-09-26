@@ -48,6 +48,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 BASE_LR = 6e-4
+ALIGN_WEIGHT = 0.0
 WARMUP_FRAC = 0.02
 
 
@@ -89,6 +90,7 @@ def _move_batch(batch: Batch, device: torch.device) -> Batch:
         state=batch.state.to(device),
         action=batch.action.to(device),
         tasks=batch.tasks,
+        teacher=None if batch.teacher is None else batch.teacher.to(device),
     )
 
 
@@ -102,12 +104,16 @@ def _train_batch(
     optimizer.zero_grad(set_to_none=True)
     autocast = torch.autocast("cuda") if device.type == "cuda" else nullcontext()
     with autocast:
-        prediction = model(batch.workspace, batch.wrist, batch.state, batch.tasks)
-        loss = F.l1_loss(prediction, batch.action)
+        memory = model.encode(batch.workspace, batch.wrist, batch.state, batch.tasks)
+        l1 = F.l1_loss(model.decode(memory), batch.action)
+        loss = l1
+        if batch.teacher is not None:
+            predicted = model.teacher_prediction(memory).float()
+            loss = loss + ALIGN_WEIGHT * (1 - F.cosine_similarity(predicted, batch.teacher, dim=-1)).mean()
     scaler.scale(loss).backward()
     scaler.step(optimizer)
     scaler.update()
-    return loss.detach().item()
+    return l1.detach().item()
 
 
 @dataclass(frozen=True)
@@ -416,7 +422,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     torch.manual_seed(args.seed)
     train_set, val_set, data_stats, tasks = load_cached(
-        args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs, holdout=args.budget_seconds is not None,
+        args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs,
+        holdout=args.budget_seconds is not None, teacher=ALIGN_WEIGHT > 0,
     )
     loader = make_loader(train_set, args.batch_size, shuffle=True, workers=args.workers)
     val_loader = None if val_set is None else make_loader(val_set, 64, shuffle=False, workers=2)

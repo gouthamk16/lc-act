@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
+from torchvision.io import decode_jpeg
 
 from lc_act.data import Sample
 from lc_act.types import HORIZON, VISION_SIZE, NormalizeStats
@@ -114,7 +115,28 @@ def build(repo_id: str, out: Path, workers: int) -> None:
             print(f"decoded {done}/{2 * total} frames", flush=True)
     if done != 2 * total:
         raise RuntimeError(f"decoded {done} frames, expected {2 * total}")
+    pack(out)
     (out / "meta.json").write_text(json.dumps({"rows": total, "size": VISION_SIZE}))
+
+
+def pack(root: Path, quality: int = 95, batch: int = 1024) -> None:
+    """Re-encode the raw frames as JPEG: ~3.5 GB stays in page cache, the 27 GB raw memmap does not.
+
+    q95 differs from the raw frames by ~1/255 on average, well under the dataset's own AV1 loss."""
+    from torchvision.io import encode_jpeg
+
+    total = int(np.load(root / "task_index.npy").shape[0])
+    for camera in CAMERAS:
+        raw = np.memmap(root / f"{camera}.u8", np.uint8, "r", shape=(total, VISION_SIZE, VISION_SIZE, 3))
+        offsets = [0]
+        with open(root / f"{camera}.jpg.bin", "wb") as blob:
+            for start in range(0, total, batch):
+                x = torch.from_numpy(np.array(raw[start:start + batch])).permute(0, 3, 1, 2).to("cuda" if torch.cuda.is_available() else "cpu")
+                for encoded in encode_jpeg(list(x), quality=quality):
+                    data = encoded.cpu().numpy().tobytes()
+                    blob.write(data)
+                    offsets.append(offsets[-1] + len(data))
+        np.save(root / f"{camera}.jpg.offsets.npy", np.array(offsets, dtype=np.int64))
 
 
 SUITES = {"libero_10": range(0, 10), "libero_goal": range(10, 20), "libero_object": range(20, 30), "libero_spatial": range(30, 40)}
@@ -135,6 +157,7 @@ class CachedLibero(torch.utils.data.Dataset):
         tasks: list[str],
         n_obs: int = 1,
         horizon: int = HORIZON,
+        teacher: bool = False,
     ) -> None:
         self.root = root
         self.rows = rows
@@ -147,29 +170,39 @@ class CachedLibero(torch.utils.data.Dataset):
         self.task_index = np.load(root / "task_index.npy")
         self.first, self.last = episode_bounds(np.load(root / "episode_index.npy"))
         self.total = len(self.task_index)
-        self._images: dict[str, np.memmap] = {}
+        self._images: dict[str, tuple[np.memmap, np.ndarray]] = {}
+        self.teacher = np.load(root / "teacher.npy", mmap_mode="r") if teacher else None
 
     def __len__(self) -> int:
         return len(self.rows)
 
-    def _camera(self, name: str) -> np.memmap:
+    def _frames(self, name: str, rows: np.ndarray) -> torch.Tensor:
         # Opened lazily so each loader worker maps the file itself.
         if name not in self._images:
-            self._images[name] = np.memmap(
-                self.root / f"{name}.u8", np.uint8, "r", shape=(self.total, VISION_SIZE, VISION_SIZE, 3)
+            self._images[name] = (
+                np.memmap(self.root / f"{name}.jpg.bin", np.uint8, "r"),
+                np.load(self.root / f"{name}.jpg.offsets.npy"),
             )
-        return self._images[name]
+        blob, offsets = self._images[name]
+        return torch.stack([
+            decode_jpeg(torch.from_numpy(np.array(blob[offsets[r]:offsets[r + 1]]))).permute(1, 2, 0)
+            for r in rows
+        ])
 
     def __getitem__(self, index: int) -> Sample:
         row = int(self.rows[index])
         history = np.maximum(np.arange(row - self.n_obs + 1, row + 1), self.first[row])
         chunk = np.minimum(np.arange(row, row + self.horizon), self.last[row])
         return Sample(
-            workspace=torch.from_numpy(np.ascontiguousarray(self._camera("workspace")[history])),
-            wrist=torch.from_numpy(np.ascontiguousarray(self._camera("wrist")[history])),
+            workspace=self._frames("workspace", history),
+            wrist=self._frames("wrist", history),
             state=self.stats.apply_state(self.state[history]),
             action=self.stats.apply_action(self.action[chunk]),
             task=self.tasks[self.task_index[row]],
+            # (now, one chunk ahead) x (workspace, wrist) teacher features
+            teacher=None if self.teacher is None else torch.from_numpy(
+                self.teacher[[row, chunk[-1]]].astype(np.float32)
+            ),
         )
 
 
@@ -196,6 +229,7 @@ def load_cached(
     all_tasks: bool = True,
     n_obs: int = 1,
     holdout: bool = False,
+    teacher: bool = False,
 ) -> tuple[CachedLibero, CachedLibero | None, NormalizeStats, list[str]]:
     if not (root / "meta.json").exists():
         raise RuntimeError(f"no frame cache at {root}; run python -m lc_act.cache")
@@ -213,7 +247,7 @@ def load_cached(
     chunks = np.minimum(train_rows[:, None] + np.arange(HORIZON), last[train_rows, None])
     actions = torch.from_numpy(np.load(root / "action.npy"))[chunks]
     stats = NormalizeStats.from_tensors(state, actions)
-    train = CachedLibero(root, train_rows, stats, tasks, n_obs)
+    train = CachedLibero(root, train_rows, stats, tasks, n_obs, teacher=teacher)
     # Every 8th held-out frame: spread over all val episodes without paying for every frame.
     val = None if val_rows is None else CachedLibero(root, val_rows[::8], stats, tasks, n_obs)
     return train, val, stats, tasks
@@ -224,8 +258,12 @@ def main() -> None:
     parser.add_argument("--repo-id", default="lerobot/libero")
     parser.add_argument("--out", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--workers", type=int, default=10)
+    parser.add_argument("--pack-only", action="store_true", help="re-encode an existing raw cache as JPEG")
     args = parser.parse_args()
-    build(args.repo_id, args.out, args.workers)
+    if args.pack_only:
+        pack(args.out)
+    else:
+        build(args.repo_id, args.out, args.workers)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from lc_act.types import (
     N_HEADS,
     RESNET_DIM,
     STATE_DIM,
+    TEACHER_DIM,
     TOKEN_DIM,
     VISION_SIZE,
 )
@@ -97,6 +98,8 @@ class LcAct(nn.Module):
         self.film = nn.Linear(d_model, 2 * d_model)
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
+        # Training-only: predict frozen DINOv2 features of this frame and of the frame one chunk ahead.
+        self.align = nn.ModuleList([_teacher_head(d_model) for _ in range(2)])
 
     def forward(
         self,
@@ -106,15 +109,30 @@ class LcAct(nn.Module):
         tasks: list[str],
     ) -> torch.Tensor:
         """Images (B, T, H, W, 3) and state (B, T, 8), oldest frame first, T = n_obs."""
+        return self.decode(self.encode(workspace, wrist, state, tasks))
+
+    def encode(
+        self,
+        workspace: torch.Tensor,
+        wrist: torch.Tensor,
+        state: torch.Tensor,
+        tasks: list[str],
+    ) -> torch.Tensor:
         lang = self.text_proj(self.text.encode(tasks)).unsqueeze(1)
         ws = self._modulate(self._image_tokens(workspace, camera=0), lang)
         wr = self._modulate(self._image_tokens(wrist, camera=1), lang)
         tx = lang + self.type_embed[0]
         st = self.state_proj(state.flatten(1)).unsqueeze(1) + self.type_embed[1]
-        memory = self.encoder(torch.cat([ws, wr, tx, st], dim=1))
-        queries = self.action_queries.unsqueeze(0).expand(state.shape[0], -1, -1)
-        decoded = self.decoder(queries, memory)
-        return self.action_head(decoded)
+        return self.encoder(torch.cat([ws, wr, tx, st], dim=1))
+
+    def decode(self, memory: torch.Tensor) -> torch.Tensor:
+        queries = self.action_queries.unsqueeze(0).expand(memory.shape[0], -1, -1)
+        return self.action_head(self.decoder(queries, memory))
+
+    def teacher_prediction(self, memory: torch.Tensor) -> torch.Tensor:
+        """(B, 2 times, 2 cameras, TEACHER_DIM) from each camera's mean-pooled encoder tokens."""
+        per_camera = memory[:, : memory.shape[1] - 2].unflatten(1, (2, -1)).mean(2)
+        return torch.stack([head(per_camera) for head in self.align], dim=1)
 
     def _modulate(self, tokens: torch.Tensor, lang: torch.Tensor) -> torch.Tensor:
         gamma, beta = self.film(lang).chunk(2, dim=-1)
@@ -130,6 +148,10 @@ class LcAct(nn.Module):
             height, width, tokens.shape[-1], tokens.device, tokens.dtype,
         )
         return tokens + pos + self.camera_embed[camera]
+
+
+def _teacher_head(d_model: int) -> nn.Sequential:
+    return nn.Sequential(nn.Linear(d_model, 2 * d_model), nn.GELU(), nn.Linear(2 * d_model, TEACHER_DIM))
 
 
 def _as_nchw_float(images: torch.Tensor) -> torch.Tensor:

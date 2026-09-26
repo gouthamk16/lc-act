@@ -8,10 +8,9 @@ import torch
 import torch.nn.functional as F
 
 from lc_act.cache import CAMERAS, DEFAULT_ROOT
-from lc_act.types import VISION_SIZE
+from lc_act.types import TEACHER_DIM, VISION_SIZE
 
 TEACHER_ID = "facebook/dinov2-small"
-TEACHER_DIM = 384
 
 
 @torch.no_grad()
