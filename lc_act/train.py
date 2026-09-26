@@ -48,7 +48,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 BASE_LR = 1.2e-3
-ALIGN_WEIGHT = 0.0
+ALIGN_WEIGHT = 0.5
 LONG_WEIGHT = 1.0
 WARMUP_FRAC = 0.02
 
