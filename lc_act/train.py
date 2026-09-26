@@ -7,7 +7,7 @@ import sys
 import time
 from contextlib import nullcontext
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Sequence
 
 import torch
@@ -128,6 +128,7 @@ class ValMetrics:
     l1: float
     raw_l1: float
     grip_acc: float
+    per_suite: dict[str, float] = field(default_factory=dict)
 
 
 def peak_gpu_gb(device: torch.device) -> float:
@@ -164,9 +165,12 @@ def evaluate_val(
     device: torch.device,
     max_batches: int,
     stats: NormalizeStats,
+    suite_of_task: dict[str, str] | None = None,
 ) -> ValMetrics:
     model.eval()
     stats = _stats_on_device(stats, device)
+    suite_sum: dict[str, float] = {}
+    suite_count: dict[str, int] = {}
     total_l1 = 0.0
     total_raw = 0.0
     total_grip = 0.0
@@ -179,6 +183,12 @@ def evaluate_val(
         with autocast:
             prediction = model(batch.workspace, batch.wrist, batch.state, batch.tasks)
             l1, raw, grip, count = _accumulate_val(prediction, batch.action, stats)
+        if suite_of_task is not None:
+            per_sample = (prediction.float() - batch.action).abs().mean((1, 2)).tolist()
+            for task, value in zip(batch.tasks, per_sample):
+                suite = suite_of_task[task]
+                suite_sum[suite] = suite_sum.get(suite, 0.0) + value
+                suite_count[suite] = suite_count.get(suite, 0) + 1
         total_l1 += l1
         total_raw += raw
         total_grip += grip
@@ -188,6 +198,7 @@ def evaluate_val(
         l1=total_l1 / denom,
         raw_l1=total_raw / denom,
         grip_acc=total_grip / denom,
+        per_suite={suite: suite_sum[suite] / suite_count[suite] for suite in sorted(suite_sum)},
     )
 
 
@@ -408,12 +419,16 @@ def _run_training(
         if deadline_box[0] is not None and time.monotonic() >= deadline_box[0]:
             break
     if val_loader is not None:
-        val = evaluate_val(model, val_loader, device, args.val_batches, stats)
+        from lc_act.cache import suite_of
+
+        suites = {task: suite_of(index) for index, task in enumerate(tasks)}
+        val = evaluate_val(model, val_loader, device, args.val_batches, stats, suites)
         print(
             f"Step {step} : train {last_train:.4f} | val {val.l1:.4f} "
             f"| raw {val.raw_l1:.4f} | grip {val.grip_acc:.3f} "
             f"| gpu {peak_gpu_gb(device):.2f}GB"
         )
+        print("suites: " + " | ".join(f"{name} {value:.4f}" for name, value in val.per_suite.items()))
     if budget is not None:
         persist(finished_epoch, step)
 
