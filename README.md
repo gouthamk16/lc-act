@@ -8,9 +8,10 @@ and not the [Starscream](https://github.com/gouthamk16/starscream) flight stack.
 GitHub: [gouthamk16/lc-act](https://github.com/gouthamk16/lc-act). In
 [Starscream](https://github.com/gouthamk16/starscream) this repo is the `vla/` git submodule.
 
-https://github.com/user-attachments/assets/9feb41c1-1167-4c94-8cdf-37dc87565e42
+[▶ Watch the demo (assets/console_demo.mp4)](assets/console_demo.mp4)
 
-*A closed-loop demo of the trained policy.*
+*The all-40-task policy driven from the web console (`python -m lc_act.live`):
+type or pick an instruction, and the matching LIBERO scene runs closed loop.*
 
 ![Panda arm picking an object and placing it in the basket, frames left to right](assets/image.png)
 
