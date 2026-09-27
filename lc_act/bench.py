@@ -136,8 +136,14 @@ def run_benchmark(
         proc.start()
         pipes.append(parent)
         procs.append(proc)
-    # Contiguous blocks per worker, so a worker rebuilds its env only when the task changes.
-    queues = [deque(block) for block in np.array_split(np.array(jobs, dtype=object), len(pipes))]
+    # Whole tasks dealt round-robin: a worker rebuilds its env only when the task changes,
+    # and long-suite tasks spread over all workers instead of landing on the last one.
+    tasks: dict[tuple[str, int], list[Job]] = defaultdict(list)
+    for job in jobs:
+        tasks[(job.suite, job.task_id)].append(job)
+    queues = [deque() for _ in pipes]
+    for index, group in enumerate(tasks.values()):
+        queues[index % len(pipes)].extend(group)
     episodes: dict[int, Episode] = {}
     observations: dict[int, tuple] = {}
     results: dict[Job, tuple[bool, int]] = {}
