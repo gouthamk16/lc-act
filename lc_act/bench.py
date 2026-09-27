@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing as mp
-import os
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -46,16 +45,7 @@ def _observe(obs: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def _worker(conn) -> None:
-    # Under WSL2, EGL falls back to llvmpipe (~42 ms per camera); GLFW through Mesa's D3D12 driver renders on the GPU.
-    # Its frames match llvmpipe's to 0.5/255 on average.
-    if "WSL_DISTRO_NAME" in os.environ:
-        os.environ.update(MUJOCO_GL="glfw", GALLIUM_DRIVER="d3d12", MESA_D3D12_DEFAULT_ADAPTER_NAME="NVIDIA")
-    os.environ.setdefault("MUJOCO_GL", "egl")
-    from lc_act.eval import _ensure_libero_config
-
-    _ensure_libero_config()
-    from libero.libero import benchmark
-    from lerobot.envs.libero import LiberoEnv
+    from lc_act.eval import make_env
 
     env, key = None, None
     while True:
@@ -67,12 +57,7 @@ def _worker(conn) -> None:
             if key != (job.suite, job.task_id):
                 if env is not None:
                     env.close()
-                suite = benchmark.get_benchmark_dict()[job.suite]()
-                env = LiberoEnv(
-                    task_suite=suite, task_id=job.task_id, task_suite_name=job.suite,
-                    obs_type="pixels_agent_pos", control_mode="relative",
-                    observation_width=256, observation_height=256, init_states=True,
-                )
+                env = make_env(job.task_id, job.suite)
                 key = (job.suite, job.task_id)
             env.init_state_id = job.init
             obs, _ = env.reset(seed=job.init)

@@ -57,19 +57,29 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def make_env(task_id: int = 0) -> Any:
+def configure_gl() -> None:
+    """Pick the MuJoCo GL backend; call before importing MuJoCo.
+
+    Under WSL2, EGL falls back to llvmpipe (~42 ms per camera); GLFW through Mesa's D3D12 driver
+    renders on the GPU, and its frames match llvmpipe's to 0.5/255 on average."""
+    if "WSL_DISTRO_NAME" in os.environ and "MUJOCO_GL" not in os.environ:
+        os.environ.update(MUJOCO_GL="glfw", GALLIUM_DRIVER="d3d12", MESA_D3D12_DEFAULT_ADAPTER_NAME="NVIDIA")
     os.environ.setdefault("MUJOCO_GL", "egl")
+
+
+def make_env(task_id: int = 0, suite_name: str = "libero_object") -> Any:
+    """One LIBERO task with LeRobot's step cap for its suite (Spatial/Object 280, Goal 300, Long 520)."""
+    configure_gl()
     _ensure_libero_config()
     try:
         from libero.libero import benchmark
         from lerobot.envs.libero import LiberoEnv
 
-        suite = benchmark.get_benchmark_dict()["libero_object"]()
+        suite = benchmark.get_benchmark_dict()[suite_name]()
         return LiberoEnv(
             task_suite=suite,
             task_id=task_id,
-            task_suite_name="libero_object",
-            episode_length=280,
+            task_suite_name=suite_name,
             obs_type="pixels_agent_pos",
             control_mode="relative",
             observation_width=256,
@@ -169,7 +179,7 @@ def run_episode(
             if on_frame is not None:
                 on_frame(frame, obs)
             success = bool(info.get("is_success", False))
-            if terminated or truncated or success:
+            if terminated or truncated or success or step + 1 >= env._max_episode_steps:
                 return success, frames
     return False, frames
 
