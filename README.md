@@ -10,7 +10,8 @@ GitHub: [gouthamk16/lc-act](https://github.com/gouthamk16/lc-act). In
 
 https://github.com/user-attachments/assets/625e6b4f-1673-4be4-ab51-8bfe6b167ec2
 
-*A closed-loop demo of the trained policy.*
+*The all-40-task policy driven from the web console (`python -m lc_act.live`):
+type or pick an instruction, and the matching LIBERO scene runs closed loop.*
 
 ![Panda arm picking an object and placing it in the basket, frames left to right](assets/image.png)
 
