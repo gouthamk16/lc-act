@@ -5,15 +5,16 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import os
+import re
 import threading
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 
-from lc_act.eval import _ensure_libero_config, _reset_obs, make_env, run_episode
+from lc_act.eval import _ensure_libero_config, _reset_obs, configure_gl, make_env, run_episode
 from lc_act.obs import flip_hw
 from lc_act.train import load_checkpoint
 
@@ -34,22 +35,26 @@ PAGE = """<!doctype html>
   input { flex: 1; font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid #3c4033; background: #1c1f17; color: inherit; }
   button { font: inherit; padding: 10px 14px; border-radius: 8px; border: 0; background: #e2b657; color: #1a160c; cursor: pointer; }
   button.reset { background: #2a2e24; color: #efe7d2; }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .chips button { background: #2a2e24; color: #efe7d2; }
+  .suite { margin-top: 16px; }
+  .suite h2 { font-size: 0.95rem; font-weight: 560; margin: 0 0 6px; color: #e2b657; }
+  .suite h2 span { color: #b7ad96; font-weight: 400; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { background: #2a2e24; color: #efe7d2; font-size: 0.85rem; padding: 7px 10px; text-align: left; }
+  .chips button small { color: #b7ad96; margin-left: 6px; }
 </style>
 </head>
 <body>
 <main>
   <h1>LC-ACT</h1>
-  <p class="note">Trained LIBERO-Object policy. Type an instruction in your own words; the buttons load the ten trained tasks. The scene is chosen from the object you name. Workspace camera on the left, wrist on the right.</p>
+  <p class="note">One 7.7M-parameter policy trained on all 40 LIBERO tasks. Pick a task, or type an instruction in your own words: the scene loads from the closest trained task and the policy hears exactly what you typed. The number on each task is its benchmark success rate. Workspace camera on the left, wrist on the right.</p>
   <img id="view" alt="MuJoCo cameras" src="/stream">
   <p id="status">Loading the policy and the simulator…</p>
   <form id="go">
-    <input id="prompt" name="prompt" placeholder="pick up the alphabet soup and place it in the basket" autocomplete="off">
+    <input id="prompt" name="prompt" placeholder="put the bowl on the plate" autocomplete="off">
     <button type="submit">Run</button>
     <button type="button" class="reset" id="reset">Reset</button>
   </form>
-  <div class="chips" id="chips"></div>
+  <div id="suites"></div>
 </main>
 <script>
 const status = document.getElementById("status");
@@ -62,14 +67,34 @@ async function refresh() {
 async function tasks() {
   const res = await fetch("/tasks");
   const body = await res.json();
-  if (!body.tasks.length) { setTimeout(tasks, 500); return; }
-  const chips = document.getElementById("chips");
-  for (const task of body.tasks) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = task.replace("pick up the ", "").replace(" and place it in the basket", "");
-    button.onclick = () => { prompt.value = task; document.getElementById("go").requestSubmit(); };
-    chips.appendChild(button);
+  if (!body.suites.length) { setTimeout(tasks, 500); return; }
+  const root = document.getElementById("suites");
+  for (const suite of body.suites) {
+    const section = document.createElement("section");
+    section.className = "suite";
+    const title = document.createElement("h2");
+    title.textContent = suite.label + " ";
+    if (suite.success !== null) {
+      const score = document.createElement("span");
+      score.textContent = `${Math.round(suite.success * 100)}%`;
+      title.appendChild(score);
+    }
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    for (const task of suite.tasks) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = task.text;
+      if (task.success !== null) {
+        const score = document.createElement("small");
+        score.textContent = `${Math.round(task.success * 100)}%`;
+        button.appendChild(score);
+      }
+      button.onclick = () => { prompt.value = task.text; document.getElementById("go").requestSubmit(); };
+      chips.appendChild(button);
+    }
+    section.append(title, chips);
+    root.appendChild(section);
   }
 }
 document.getElementById("go").onsubmit = async (event) => {
@@ -92,36 +117,43 @@ setInterval(refresh, 500);
 """
 
 
+SUITE_LABELS = {"libero_spatial": "Spatial", "libero_object": "Object", "libero_goal": "Goal", "libero_10": "Long"}
+_FILLER = {"the", "a", "an", "and", "it", "in", "on", "of", "to", "up", "put", "pick", "place", "both"}
+
+
+@dataclass(frozen=True)
+class Task:
+    suite: str
+    task_id: int
+    text: str
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z]+", text.lower())) - _FILLER
+
+
 def resolve_prompt(query: str, tasks: Sequence[str]) -> tuple[str, str]:
-    """Return (scene task, text the policy hears). The scene is one of `tasks`."""
+    """Return (scene task, text the policy hears). The scene is the trained task sharing the most words."""
     spoken = " ".join(query.split())
-    text = spoken.lower()
-    if not text:
-        raise ValueError("type an instruction, or choose one of the ten tasks")
-    named = [_object_name(task) for task in tasks]
-    full = [task for name, task in zip(named, tasks) if name in text]
-    if full:
-        longest = max(len(_object_name(task)) for task in full)
-        hits = [task for task in full if len(_object_name(task)) == longest]
-        if len(hits) > 1:
-            raise ValueError("that matches more than one object: " + ", ".join(hits))
-        return hits[0], spoken
-    words = set(text.split())
-    partial = [task for name, task in zip(named, tasks) if words & set(name.split())]
-    if len(partial) == 1:
-        return partial[0], spoken
-    if len(partial) > 1:
-        raise ValueError("that matches more than one object: " + ", ".join(partial))
-    raise ValueError("name one of the objects so the scene can load: " + ", ".join(named))
-
-
-def _object_name(task: str) -> str:
-    lowered = task.lower()
-    head = "pick up the "
-    tail = " and place it in the basket"
-    if lowered.startswith(head) and lowered.endswith(tail):
-        return lowered[len(head):-len(tail)]
-    return lowered
+    if not spoken:
+        raise ValueError("type an instruction, or choose one of the trained tasks")
+    exact = [task for task in tasks if task.lower() == spoken.lower()]
+    if exact:
+        return exact[0], spoken
+    words = _words(spoken)
+    scored = []
+    for task in tasks:
+        overlap = len(words & _words(task))
+        if overlap:
+            # More shared words first; then the task whose own words are most fully covered.
+            scored.append(((overlap, overlap / len(_words(task))), task))
+    if not scored:
+        raise ValueError("no trained task matches; name an object or action from the task list")
+    best = max(score for score, _ in scored)
+    hits = [task for score, task in scored if score == best]
+    if len(hits) > 1:
+        raise ValueError("that matches more than one task: " + "; ".join(hits[:4]))
+    return hits[0], spoken
 
 
 def _as_uint8(image: object) -> np.ndarray:
@@ -146,9 +178,10 @@ def _jpeg(frame: np.ndarray) -> bytes:
 
 
 class Console:
-    def __init__(self, ckpt: Path) -> None:
+    def __init__(self, ckpt: Path, bench: Path | None) -> None:
         self.ckpt = ckpt
-        self.tasks: list[str] = []
+        self.bench = json.loads(bench.read_text()) if bench is not None and bench.exists() else None
+        self.tasks: list[Task] = []
         self._jpeg: bytes | None = None
         self._seq = 0
         self._cond = threading.Condition()
@@ -179,7 +212,7 @@ class Console:
     def submit(self, text: str) -> str:
         if not self.tasks:
             raise ValueError("still loading the simulator")
-        scene, spoken = resolve_prompt(text, self.tasks)
+        scene, spoken = resolve_prompt(text, [task.text for task in self.tasks])
         with self._cond:
             self._request = ("run", scene, spoken)
             self.message = f"Starting: {spoken}"
@@ -194,6 +227,21 @@ class Console:
             self._cancel.set()
             self._cond.notify_all()
 
+    def suites(self) -> list[dict]:
+        scores = (self.bench or {}).get("tasks", {})
+        by_suite = (self.bench or {}).get("suites", {})
+        return [
+            {
+                "label": label,
+                "success": by_suite.get(suite),
+                "tasks": [
+                    {"text": task.text, "success": scores.get(f"{suite}/{task.task_id}")}
+                    for task in self.tasks if task.suite == suite
+                ],
+            }
+            for suite, label in SUITE_LABELS.items()
+        ] if self.tasks else []
+
     def _take(self) -> tuple[str, str, str] | None:
         with self._cond:
             request = self._request
@@ -202,7 +250,7 @@ class Console:
             return request
 
     def _loop(self) -> None:
-        os.environ.setdefault("MUJOCO_GL", "egl")
+        configure_gl()
         import torch
         from libero.libero import benchmark
 
@@ -210,10 +258,12 @@ class Console:
         model, stats = load_checkpoint(self.ckpt, device)
         model.eval()
         _ensure_libero_config()
-        suite = benchmark.get_benchmark_dict()["libero_object"]()
-        self.tasks = [suite.get_task(i).language for i in range(10)]
-        env = make_env(0)
-        current = 0
+        suites = benchmark.get_benchmark_dict()
+        self.tasks = [
+            Task(name, i, suites[name]().get_task(i).language) for name in SUITE_LABELS for i in range(10)
+        ]
+        current = self.tasks[0]
+        env = make_env(current.task_id, current.suite)
         self._show_start(env)
         self.message = "Ready. Choose a task."
         while True:
@@ -227,23 +277,26 @@ class Console:
                 self._show_start(env)
                 self.message = "Ready. Choose a task."
                 continue
-            task_id = self.tasks.index(scene)
-            if env is None or current != task_id:
-                if env is not None and hasattr(env, "close"):
-                    env.close()
-                env = make_env(task_id)
-                current = task_id
-            self.message = f"Running: {spoken}"
+            task = next(task for task in self.tasks if task.text == scene)
+            if task != current:
+                env.close()
+                env = make_env(task.task_id, task.suite)
+                current = task
+            label = f"{SUITE_LABELS[task.suite]} scene"
+            steps = [0]
 
             def on_frame(_frame: np.ndarray, obs: dict) -> None:
                 self.publish(camera_strip(obs))
+                self.message = f"Running ({label}, step {steps[0]}/{env._max_episode_steps}): {spoken}"
+                steps[0] += 1
 
             success, _frames = run_episode(
                 model, stats, env, device, 0, task=spoken,
                 on_frame=on_frame, stop=self._cancel.is_set,
             )
             if not self._cancel.is_set():
-                self.message = f"{'Done' if success else 'Missed'}: {spoken}"
+                verdict = "Done" if success else "Missed"
+                self.message = f"{verdict} in {steps[0] - 1} steps ({label}): {spoken}"
 
     def _show_start(self, env: object) -> None:
         obs = _reset_obs(env.reset(seed=0))  # type: ignore[attr-defined]
@@ -280,7 +333,7 @@ def _handler(console: Console) -> type[BaseHTTPRequestHandler]:
                 self.wfile.write(body)
                 return
             if self.path == "/tasks":
-                self._json(200, {"tasks": console.tasks})
+                self._json(200, {"suites": console.suites()})
                 return
             if self.path == "/status":
                 self._json(200, {"message": console.message})
@@ -325,13 +378,17 @@ def _handler(console: Console) -> type[BaseHTTPRequestHandler]:
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Watch LC-ACT in a browser")
-    parser.add_argument("--ckpt", type=Path, default=Path("outputs/lc_act/last.pt"))
+    parser.add_argument("--ckpt", type=Path, default=Path("outputs/lc_act_all40/last.pt"))
+    parser.add_argument(
+        "--bench", type=Path, default=Path("outputs/lc_act_all40/bench20_decay.json"),
+        help="lc_act.bench summary whose per-task success rates label the buttons",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
     if not args.ckpt.exists():
         raise SystemExit(f"missing checkpoint: {args.ckpt}")
-    console = Console(args.ckpt)
+    console = Console(args.ckpt, args.bench)
     console.start()
     serve(console, args.host, args.port)
 

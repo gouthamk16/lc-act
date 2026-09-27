@@ -57,19 +57,29 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def make_env(task_id: int = 0) -> Any:
+def configure_gl() -> None:
+    """Pick the MuJoCo GL backend; call before importing MuJoCo.
+
+    Under WSL2, EGL falls back to llvmpipe (~42 ms per camera); GLFW through Mesa's D3D12 driver
+    renders on the GPU, and its frames match llvmpipe's to 0.5/255 on average."""
+    if "WSL_DISTRO_NAME" in os.environ and "MUJOCO_GL" not in os.environ:
+        os.environ.update(MUJOCO_GL="glfw", GALLIUM_DRIVER="d3d12", MESA_D3D12_DEFAULT_ADAPTER_NAME="NVIDIA")
     os.environ.setdefault("MUJOCO_GL", "egl")
+
+
+def make_env(task_id: int = 0, suite_name: str = "libero_object") -> Any:
+    """One LIBERO task with LeRobot's step cap for its suite (Spatial/Object 280, Goal 300, Long 520)."""
+    configure_gl()
     _ensure_libero_config()
     try:
         from libero.libero import benchmark
         from lerobot.envs.libero import LiberoEnv
 
-        suite = benchmark.get_benchmark_dict()["libero_object"]()
+        suite = benchmark.get_benchmark_dict()[suite_name]()
         return LiberoEnv(
             task_suite=suite,
             task_id=task_id,
-            task_suite_name="libero_object",
-            episode_length=280,
+            task_suite_name=suite_name,
             obs_type="pixels_agent_pos",
             control_mode="relative",
             observation_width=256,
@@ -169,17 +179,24 @@ def run_episode(
             if on_frame is not None:
                 on_frame(frame, obs)
             success = bool(info.get("is_success", False))
-            if terminated or truncated or success:
+            if terminated or truncated or success or step + 1 >= env._max_episode_steps:
                 return success, frames
     return False, frames
 
 
-def temporal_ensemble(candidates: list[torch.Tensor], decay: float) -> torch.Tensor:
-    """ACT temporal ensembling: candidates oldest first, weighted exp(-decay * i)."""
+def temporal_ensemble(
+    candidates: list[torch.Tensor], decay: float, log_scales: list[torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """ACT temporal ensembling: candidates oldest first, weighted exp(-decay * i).
+
+    With log_scales (the model's Laplace scale per candidate and dim), each weight is also divided
+    by its scale, so a confident fresh prediction outvotes an unsure old one."""
     ages = torch.arange(len(candidates), dtype=torch.float32, device=candidates[0].device)
-    weights = torch.exp(-decay * ages)
-    weights = weights / weights.sum()
-    return (torch.stack(candidates) * weights[:, None]).sum(0)
+    weights = torch.exp(-decay * ages)[:, None].expand(-1, candidates[0].shape[-1])
+    if log_scales is not None:
+        weights = weights * torch.exp(-torch.stack(log_scales).float())
+    weights = weights / weights.sum(0)
+    return (torch.stack(candidates) * weights).sum(0)
 
 
 def _save_video(path: Path, frames: list[np.ndarray]) -> None:

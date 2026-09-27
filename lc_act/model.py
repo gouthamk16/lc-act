@@ -15,6 +15,7 @@ from lc_act.types import (
     N_HEADS,
     RESNET_DIM,
     STATE_DIM,
+    TEACHER_DIM,
     TOKEN_DIM,
     VISION_SIZE,
 )
@@ -94,9 +95,13 @@ class LcAct(nn.Module):
         self.encoder = _make_encoder(d_model, n_heads, ffn_dim, n_encoder_layers)
         self.decoder = _make_decoder(d_model, n_heads, ffn_dim, n_decoder_layers)
         self.action_head = nn.Linear(d_model, ACTION_DIM)
+        # Laplace log-scale per action dim, fit on detached features so it never changes the actions.
+        self.scale_head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, ACTION_DIM))
         self.film = nn.Linear(d_model, 2 * d_model)
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
+        # Training-only: predict frozen DINOv2 features of this frame and of the frame one chunk ahead.
+        self.align = nn.ModuleList([_teacher_head(d_model) for _ in range(2)])
 
     def forward(
         self,
@@ -104,17 +109,39 @@ class LcAct(nn.Module):
         wrist: torch.Tensor,
         state: torch.Tensor,
         tasks: list[str],
-    ) -> torch.Tensor:
+        with_scale: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Images (B, T, H, W, 3) and state (B, T, 8), oldest frame first, T = n_obs."""
+        return self.decode(self.encode(workspace, wrist, state, tasks), with_scale)
+
+    def encode(
+        self,
+        workspace: torch.Tensor,
+        wrist: torch.Tensor,
+        state: torch.Tensor,
+        tasks: list[str],
+    ) -> torch.Tensor:
         lang = self.text_proj(self.text.encode(tasks)).unsqueeze(1)
         ws = self._modulate(self._image_tokens(workspace, camera=0), lang)
         wr = self._modulate(self._image_tokens(wrist, camera=1), lang)
         tx = lang + self.type_embed[0]
         st = self.state_proj(state.flatten(1)).unsqueeze(1) + self.type_embed[1]
-        memory = self.encoder(torch.cat([ws, wr, tx, st], dim=1))
-        queries = self.action_queries.unsqueeze(0).expand(state.shape[0], -1, -1)
-        decoded = self.decoder(queries, memory)
-        return self.action_head(decoded)
+        return self.encoder(torch.cat([ws, wr, tx, st], dim=1))
+
+    def decode(
+        self, memory: torch.Tensor, with_scale: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        queries = self.action_queries.unsqueeze(0).expand(memory.shape[0], -1, -1)
+        hidden = self.decoder(queries, memory)
+        actions = self.action_head(hidden)
+        if not with_scale:
+            return actions
+        return actions, self.scale_head(hidden.detach())
+
+    def teacher_prediction(self, memory: torch.Tensor) -> torch.Tensor:
+        """(B, 2 times, 2 cameras, TEACHER_DIM) from each camera's mean-pooled encoder tokens."""
+        per_camera = memory[:, : memory.shape[1] - 2].unflatten(1, (2, -1)).mean(2)
+        return torch.stack([head(per_camera) for head in self.align], dim=1)
 
     def _modulate(self, tokens: torch.Tensor, lang: torch.Tensor) -> torch.Tensor:
         gamma, beta = self.film(lang).chunk(2, dim=-1)
@@ -130,6 +157,10 @@ class LcAct(nn.Module):
             height, width, tokens.shape[-1], tokens.device, tokens.dtype,
         )
         return tokens + pos + self.camera_embed[camera]
+
+
+def _teacher_head(d_model: int) -> nn.Sequential:
+    return nn.Sequential(nn.Linear(d_model, 2 * d_model), nn.GELU(), nn.Linear(2 * d_model, TEACHER_DIM))
 
 
 def _as_nchw_float(images: torch.Tensor) -> torch.Tensor:
@@ -161,7 +192,8 @@ class ResNetSpatial(nn.Module):
         weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         net = resnet18(weights=weights)
         # Through layer3: at 128 px this is an 8x8 grid without layer4's 8.4M params.
-        self.stem = nn.Sequential(*list(net.children())[:-3])
+        # channels_last: 2.2x faster fp16 convs on Ada (157 -> 70 ms per batch-64 step).
+        self.stem = nn.Sequential(*list(net.children())[:-3]).to(memory_format=torch.channels_last)
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
         self.register_buffer("mean", mean)
@@ -169,10 +201,11 @@ class ResNetSpatial(nn.Module):
 
     def encode(self, images: torch.Tensor, group: int = 1) -> torch.Tensor:
         x = _as_nchw_float(images).to(device=self.mean.device, dtype=self.mean.dtype)
-        x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
+        if x.shape[-1] != VISION_SIZE:
+            x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
         if self.training:
             x = _random_shift(x, pad=8, group=group)
-        x = (x - self.mean) / self.std
+        x = ((x - self.mean) / self.std).contiguous(memory_format=torch.channels_last)
         feat = self.stem(x)
         return feat.flatten(2).transpose(1, 2)
 

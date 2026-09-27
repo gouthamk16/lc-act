@@ -33,6 +33,30 @@ def test_resolve_prompt_rejects_two_sauces():
         resolve_prompt("sauce", TASKS)
 
 
-def test_resolve_prompt_rejects_text_with_no_object():
-    with pytest.raises(ValueError, match="name one of the objects"):
+def test_resolve_prompt_rejects_text_with_no_task_words():
+    with pytest.raises(ValueError, match="no trained task matches"):
         resolve_prompt("fly the drone", TASKS)
+
+
+MIXED = [
+    "put the bowl on the plate",
+    "pick up the black bowl next to the plate and place it on the plate",
+    "turn on the stove",
+    "put the bowl on the stove",
+    "open the middle drawer of the cabinet",
+    "open the top drawer and put the bowl inside",
+]
+
+
+def test_resolve_prompt_prefers_the_task_its_words_cover():
+    scene, _ = resolve_prompt("bowl onto the plate please", MIXED)
+    assert scene == "put the bowl on the plate"
+
+
+def test_resolve_prompt_picks_across_suites():
+    assert resolve_prompt("turn the stove on", MIXED)[0] == "turn on the stove"
+
+
+def test_resolve_prompt_rejects_a_bowl_with_no_destination():
+    with pytest.raises(ValueError, match="more than one"):
+        resolve_prompt("the bowl", MIXED)

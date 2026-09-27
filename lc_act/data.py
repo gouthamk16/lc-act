@@ -74,6 +74,7 @@ class Sample:
     state: torch.Tensor
     action: torch.Tensor
     task: str
+    teacher: torch.Tensor | None = None
 
 
 def _frames_uint8(frames: Any) -> torch.Tensor:
@@ -141,6 +142,7 @@ def collate(samples: list[Sample]) -> Batch:
         state=torch.stack([sample.state for sample in samples]),
         action=torch.stack([sample.action for sample in samples]),
         tasks=[sample.task for sample in samples],
+        teacher=None if samples[0].teacher is None else torch.stack([sample.teacher for sample in samples]),
     )
 
 
