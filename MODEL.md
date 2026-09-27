@@ -69,9 +69,9 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 | Inference total | 7,732,046 | |
 | Train memory | 1.7 GB peak at batch 64 (RTX 4060 Laptop 8 GB) | |
 
-Current weights: `outputs/lc_act/last.pt` (2026-09-24, commit `be73e88`, Object suite only, single frame, 3 h / 36 epochs). Closed loop over 10 Object tasks: **95%** (95/100, 10 episodes per task) with temporal ensembling; 86% (43/50, 5 per task) executing full 16-step chunks open-loop. Mean 135 env steps per success.
+Current weights: `outputs/lc_act_all40/last.pt` (2026-09-27, commit `3378ba0`, all 40 tasks, 4 h / 40 epochs, ~11M samples). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 95.5, Object 98.0, Goal 91.0, Long 82.5, **average 91.75%** (MINERVA-9.66M: 97.45). The misses concentrate in drawers and multi-step tasks (Long 8 at 25%, Goal 3 at 55%).
 
-Older weights (`last_3epoch_5enc3dec.pt`: 512-d, 5+3 layers, 256 px, 40.6M trainable) reach 62% on the same 50 episodes and do not load into this architecture.
+Older Object-only weights: `outputs/lc_act/last.pt` (commit `be73e88`, single frame): 95% over the 10 Object tasks with `lc_act.eval` (no step cap).
 
 ## Data and eval
 

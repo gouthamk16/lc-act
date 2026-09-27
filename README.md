@@ -133,11 +133,12 @@ python -m lc_act.eval \
 The original done bar was at least 2/10 successful soup episodes plus a
 playable `outputs/lc_act/soup_ep0.mp4`; the current weights clear it.
 
-Watch the trained policy in a browser. This loads `outputs/lc_act/last.pt`
-(the Object-suite run) and streams the simulator cameras. No MuJoCo window:
-WSL renders headlessly, and the page shows those frames. Buttons run the ten
-trained instructions. A typed sentence is passed through as written, and the
-object name in it selects which of those ten scenes to load.
+Watch the trained policy in a browser. This loads `outputs/lc_act_all40/last.pt`
+and streams the simulator cameras (rendered on the GPU under WSL2). The page
+lists all 40 tasks by suite with each one's benchmark success rate. A typed
+sentence is passed to the policy as written; the scene loads from the trained
+task that shares the most words with it. Stop the benchmark first: each LIBERO
+env holds ~2.9 GB of RAM.
 
 ```bash
 python -m lc_act.live
@@ -159,19 +160,33 @@ integration.
 
 ## Results
 
-Current weights: `outputs/lc_act/last.pt` (commit `be73e88`; Object suite,
-single frame, 3-hour run on an RTX 4060 Laptop 8 GB).
+Current weights: `outputs/lc_act_all40/last.pt` (commit `3378ba0`; all 40
+tasks, two frames, DINOv2 alignment; 4-hour run, 40 epochs, ~11M samples, on
+an RTX 4060 Laptop 8 GB). Benchmarked with `lc_act.bench`: every task of the
+four suites, init states 0–19 (800 rollouts), LeRobot step caps, replan every
+step with temporal ensembling.
 
-| Eval (10 LIBERO-Object tasks) | Success |
-| --- | --- |
-| Replan every step + temporal ensembling (10 episodes per task) | **95%** (95/100) |
-| Open-loop 16-step chunks (5 episodes per task) | 86% (43/50) |
-| Previous 40.6M-parameter checkpoint, open-loop (5 per task) | 62% (31/50) |
+| Suite | LC-ACT 7.7M (20 per task) | MINERVA-9.66M (50 per task) | π₀.₅ via LeRobot |
+| --- | --- | --- | --- |
+| Spatial | 95.5% | 98.4% | 97.0% |
+| Object | 98.0% | 99.0% | 99.0% |
+| Goal | 91.0% | 98.4% | 98.0% |
+| Long | 82.5% | 94.0% | 96.0% |
+| **Average** | **91.75%** | 97.45% | 97.5% |
 
-Successful episodes take 135 env steps on average. The remaining failures are
-grasp misses on small or flat objects (cream cheese, milk); the policy then
-carries nothing to the basket instead of re-grasping. The autoresearch log
-behind this model is `artifacts/results.tsv`.
+This does not beat MINERVA yet: the gap is 1–3 points on Spatial and Object
+and 7–12 points on Goal and Long. The weakest tasks are Long 8 (25%), Goal 3
+"open the top drawer and put the bowl inside" (55%), Long 7 (70%) and Goal 0
+"open the middle drawer of the cabinet" (75%): drawers and multi-step tasks.
+The next candidate change is language FiLM inside every ResNet stage (MINERVA
+conditions its encoder on the task; ours only modulates tokens after the
+ResNet), stashed as `stage FiLM from language` and not yet trained.
+
+The autoresearch log is `artifacts/results.tsv`; per-task rates are in
+`outputs/lc_act_all40/bench20_decay.json`.
+
+The earlier Object-only model (`outputs/lc_act/last.pt`, commit `be73e88`)
+scored 95% on the ten Object tasks, measured without a step cap.
 
 History:
 
@@ -183,3 +198,7 @@ History:
 - 2026-09-24: an autoresearch pass shrank the model to 7.6M trainable
   parameters (128 px, 256-wide transformer) while raising all-task success from
   62% to 86% open-loop, and 95% with temporal ensembling.
+- 2026-09-27: all 40 tasks from a JPEG frame cache (830 vs 220 samples/s),
+  two-frame history, batch 64, and training-only alignment to frozen DINOv2
+  features of the current frame and the frame one chunk ahead. 91.75% over the
+  four suites (800 rollouts).
