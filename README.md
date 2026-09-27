@@ -8,7 +8,7 @@ and not the [Starscream](https://github.com/gouthamk16/starscream) flight stack.
 GitHub: [gouthamk16/lc-act](https://github.com/gouthamk16/lc-act). In
 [Starscream](https://github.com/gouthamk16/starscream) this repo is the `vla/` git submodule.
 
-https://github.com/user-attachments/assets/9feb41c1-1167-4c94-8cdf-37dc87565e42
+https://github.com/user-attachments/assets/625e6b4f-1673-4be4-ab51-8bfe6b167ec2
 
 *A closed-loop demo of the trained policy.*
 
