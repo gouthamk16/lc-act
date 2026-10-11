@@ -2,7 +2,7 @@
 
 **Status:** approved. Canonical card for the code in this folder. If implementation drifts, update this file in the same change.
 
-Language-conditioned action chunking transformer. Small imitation policy for LIBERO (Franka in MuJoCo), 7.7M parameters at inference. Trains on all 40 tasks of the four standard suites by default (`--object-only` for the Object suite). Not a 7B VLA. Not the x500.
+Language-conditioned action chunking transformer. Small imitation policy for LIBERO (Franka in MuJoCo), 8.0M parameters at inference. Trains on all 40 tasks of the four standard suites by default (`--object-only` for the Object suite). Not a 7B VLA. Not the x500.
 
 | | |
 | --- | --- |
@@ -30,7 +30,8 @@ The diagram matches the code, including token tagging.
 
 ```
 workspace RGB 256×256 ──┐  resize to 128×128 (train: ±8 px random shift)
-                        ├── shared ResNet-18 through layer3 (trainable)
+                        ├── shared ResNet-18 through layer3 (trainable),
+                        │   each stage FiLM'd by the language token
 wrist RGB 256×256 ──────┘         │
                                   ▼
                          8×8 spatial tokens per camera (256-d)
@@ -50,7 +51,9 @@ training only:
                                                    and of the frame 15 steps ahead → cosine
 ```
 
-Two observation frames (the default, `--n-obs 2`): each sample carries the previous frame and state (oldest first). Both frames go through the shared ResNet with one shared random shift, and each token concatenates the two frames' 256-d features before the linear projection, so the token count stays the same. The state token projects the 2×8 stacked states.
+Two observation frames, 8 env steps apart (the default: `--n-obs 2`, `OBS_STRIDE = 8` in `train.py`, saved in the checkpoint): each sample carries the frame and state from 8 steps earlier plus the current ones (oldest first; at episode start the first frame repeats). Adjacent frames barely differ; frames a chunk apart show progress, which multi-step Long tasks need to tell which half they are in. Both frames go through the shared ResNet with one shared random shift, and each token concatenates the two frames' 256-d features before the linear projection, so the token count stays the same. The state token projects the 2×8 stacked states. On the 10-minute proxy this cut held-out L1 from 0.3249 to 0.3048 on every suite. Because a history policy can score well offline by extrapolating past motion and then react badly in closed loop ("copycat"), it was checked closed-loop before keeping: 90.0% vs 88.8% on 80 paired rollouts, so no harm, but no clear gain at that budget either.
+
+**Language FiLM in every ResNet stage.** The language token also produces a zero-initialized (γ, β) per channel for the outputs of layer1, layer2 and layer3, so the instruction changes what the vision features pick out, not only how the finished tokens are weighted. Goal-suite tasks share one scene and differ only in the instruction, and that suite moved most (held-out L1 0.3548 → 0.3492; overall 0.3277 → 0.3249). On Object alone (Sept 2026) the same change was neutral, because language barely matters there.
 
 **Teacher alignment and latent foresight (the novel piece).** `python -m lc_act.teacher` runs frozen DINOv2-small once over every cached frame and stores its mean-pooled patch features (420 MB). Training adds a cosine loss (weight 0.5) that makes each camera's pooled encoder tokens predict that feature for the current frame and for the frame one chunk ahead. The first is REPA-style representation alignment; the second asks the encoder to anticipate where the scene is going, which is the part a chunked policy needs. It combines two 2026 results: world-model representation distillation into 0.8B VLAs (cached teacher features, cosine alignment, 95.3 → 97.9% LIBERO) and MINERVA's finding that small LIBERO policies are limited by vision capacity, not size. The heads cost 0.66M parameters in training and nothing at inference. On the 10-minute proxy it improved held-out L1 on all four suites (0.3300 → 0.3273). A spatial variant (4×4 DINOv2 patch grid, PCA-64) tied and was dropped.
 
@@ -63,10 +66,10 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 | Piece | Params | Train? |
 | --- | --- | --- |
 | ResNet-18 through layer3 | 2,782,784 | yes |
-| Projections, tags, FiLM, transformer, action + scale heads | 4,949,262 | yes |
+| Projections, tags, token and stage FiLM, transformer, action + scale heads | 5,179,534 | yes |
 | Teacher-alignment heads | 657,152 | training only |
 | CLIP text | ~63M | frozen |
-| Inference total | 7,732,046 | |
+| Inference total | 7,962,318 | |
 | Train memory | 1.7 GB peak at batch 64 (RTX 4060 Laptop 8 GB) | |
 
 Current weights: `outputs/lc_act_all40/last.pt` (2026-09-27, commit `3378ba0`, all 40 tasks, 4 h / 40 epochs, ~11M samples). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 95.5, Object 98.0, Goal 91.0, Long 82.5, **average 91.75%** (MINERVA-9.66M: 97.45). The misses concentrate in drawers and multi-step tasks (Long 8 at 25%, Goal 3 at 55%).
