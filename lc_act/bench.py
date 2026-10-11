@@ -189,6 +189,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark LC-ACT on LIBERO suites")
     parser.add_argument("--ckpt", type=Path, required=True)
     parser.add_argument("--suites", nargs="+", default=list(SUITE_NAMES), choices=SUITE_NAMES)
+    parser.add_argument("--tasks", nargs="+", default=None, help="only these, as suite/task_id (e.g. libero_10/8)")
     parser.add_argument("--episodes", type=int, default=50, help="init states per task")
     parser.add_argument("--envs", type=int, default=2, help="each LIBERO env holds ~2.9 GB (MuJoCo arena)")
     parser.add_argument("--ensemble", choices=("decay", "uncertainty"), default="decay")
@@ -202,7 +203,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, stats = load_checkpoint(args.ckpt, device)
-    jobs = [Job(suite, task, init) for suite in args.suites for task in range(10) for init in range(args.episodes)]
+    picked = [(suite, task) for suite in args.suites for task in range(10)]
+    if args.tasks:
+        picked = [(suite, int(task)) for suite, task in (name.split("/") for name in args.tasks)]
+    jobs = [Job(suite, task, init) for suite, task in picked for init in range(args.episodes)]
     started = time.monotonic()
     results = run_benchmark(model, stats, jobs, args.envs, device, args.ensemble == "uncertainty")
     summary = summarize(results)
