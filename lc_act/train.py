@@ -49,6 +49,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 BASE_LR = 1.2e-3
 ALIGN_WEIGHT = 0.5
+# Gap in env steps between history frames.
+OBS_STRIDE = 8
 LONG_WEIGHT = 1.0
 WARMUP_FRAC = 0.02
 
@@ -448,7 +450,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     torch.manual_seed(args.seed)
     train_set, val_set, data_stats, tasks = load_cached(
         args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs,
-        holdout=args.budget_seconds is not None, teacher=ALIGN_WEIGHT > 0,
+        holdout=args.budget_seconds is not None, teacher=ALIGN_WEIGHT > 0, obs_stride=OBS_STRIDE,
     )
     # MINERVA: long-horizon demos are the scarce, hard ones; oversample them.
     long_suite = torch.from_numpy(train_set.task_index[train_set.rows] < 10)

@@ -60,3 +60,11 @@ def test_load_cached_holdout_keeps_val_out_of_train(tmp_path):
     train, val, _, _ = load_cached(tmp_path, holdout=True)
     assert set(train.rows.tolist()).isdisjoint(val.rows.tolist())
     assert val.rows.tolist() == [8]
+
+
+def test_strided_history_reaches_back_and_clamps_at_episode_start(tmp_path):
+    _fake_cache(tmp_path, [0] * 12)
+    train, _, stats, _ = load_cached(tmp_path, n_obs=2)
+    data = CachedLibero(tmp_path, np.array([3, 11]), stats, train.tasks, n_obs=2, obs_stride=8)
+    assert torch.allclose(data[0].workspace[:, 0, 0, 0].float(), torch.tensor([0.0, 30.0]), atol=2)
+    assert torch.allclose(data[1].workspace[:, 0, 0, 0].float(), torch.tensor([30.0, 110.0]), atol=2)
