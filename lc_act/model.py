@@ -21,8 +21,13 @@ from lc_act.types import (
 )
 
 
+STAGE_CHANNELS = (64, 128, 256)  # ResNet-18 layer1..layer3
+
+
 class SpatialVision(Protocol):
-    def encode(self, images: torch.Tensor, group: int = 1) -> torch.Tensor: ...
+    def encode(
+        self, images: torch.Tensor, group: int = 1, film: list[torch.Tensor] | None = None,
+    ) -> torch.Tensor: ...
 
 
 class TextEncoder(Protocol):
@@ -100,6 +105,10 @@ class LcAct(nn.Module):
         self.film = nn.Linear(d_model, 2 * d_model)
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
+        # Language steers each ResNet stage, so Goal-suite instructions (same scene, different target) change what the features pick out.
+        self.stage_film = nn.Linear(d_model, 2 * sum(STAGE_CHANNELS))
+        nn.init.zeros_(self.stage_film.weight)
+        nn.init.zeros_(self.stage_film.bias)
         # Training-only: predict frozen DINOv2 features of this frame and of the frame one chunk ahead.
         self.align = nn.ModuleList([_teacher_head(d_model) for _ in range(2)])
 
@@ -122,8 +131,8 @@ class LcAct(nn.Module):
         tasks: list[str],
     ) -> torch.Tensor:
         lang = self.text_proj(self.text.encode(tasks)).unsqueeze(1)
-        ws = self._modulate(self._image_tokens(workspace, camera=0), lang)
-        wr = self._modulate(self._image_tokens(wrist, camera=1), lang)
+        ws = self._modulate(self._image_tokens(workspace, 0, lang), lang)
+        wr = self._modulate(self._image_tokens(wrist, 1, lang), lang)
         tx = lang + self.type_embed[0]
         st = self.state_proj(state.flatten(1)).unsqueeze(1) + self.type_embed[1]
         return self.encoder(torch.cat([ws, wr, tx, st], dim=1))
@@ -147,9 +156,11 @@ class LcAct(nn.Module):
         gamma, beta = self.film(lang).chunk(2, dim=-1)
         return tokens * (1 + gamma) + beta
 
-    def _image_tokens(self, images: torch.Tensor, camera: int) -> torch.Tensor:
+    def _image_tokens(self, images: torch.Tensor, camera: int, lang: torch.Tensor) -> torch.Tensor:
         batch, frames = images.shape[:2]
-        feats = self.vision.encode(images.flatten(0, 1), group=frames)
+        film = self.stage_film(lang[:, 0]).repeat_interleave(frames, 0)
+        film = list(film.split([2 * c for c in STAGE_CHANNELS], dim=-1))
+        feats = self.vision.encode(images.flatten(0, 1), group=frames, film=film)
         feats = feats.reshape(batch, frames, *feats.shape[1:]).transpose(1, 2).flatten(2)
         tokens = self.vision_proj(feats)
         height, width = grid_hw(tokens.shape[1])
@@ -199,14 +210,21 @@ class ResNetSpatial(nn.Module):
         self.register_buffer("mean", mean)
         self.register_buffer("std", std)
 
-    def encode(self, images: torch.Tensor, group: int = 1) -> torch.Tensor:
+    def encode(
+        self, images: torch.Tensor, group: int = 1, film: list[torch.Tensor] | None = None,
+    ) -> torch.Tensor:
         x = _as_nchw_float(images).to(device=self.mean.device, dtype=self.mean.dtype)
         if x.shape[-1] != VISION_SIZE:
             x = F.interpolate(x, size=VISION_SIZE, mode="bilinear", antialias=True)
         if self.training:
             x = _random_shift(x, pad=8, group=group)
         x = ((x - self.mean) / self.std).contiguous(memory_format=torch.channels_last)
-        feat = self.stem(x)
+        feat = self.stem[:4](x)
+        for index, stage in enumerate(self.stem[4:]):
+            feat = stage(feat)
+            if film is not None:
+                gamma, beta = film[index][:, :, None, None].to(feat.dtype).chunk(2, dim=1)
+                feat = feat * (1 + gamma) + beta
         return feat.flatten(2).transpose(1, 2)
 
 
