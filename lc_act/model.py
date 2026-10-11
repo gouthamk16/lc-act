@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Protocol, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -84,12 +84,14 @@ class LcAct(nn.Module):
         ffn_dim: int = FFN_DIM,
         horizon: int = HORIZON,
         n_obs: int = 1,
+        obs_stride: int = 1,
     ) -> None:
         super().__init__()
         self.vision = vision
         self.text = text
         self.horizon = horizon
         self.n_obs = n_obs
+        self.obs_stride = obs_stride
         # History frames are fused per token by channel concat, so the token count stays fixed.
         self.vision_proj = nn.Linear(n_obs * RESNET_DIM, d_model)
         self.text_proj = nn.Linear(CLIP_DIM, d_model)
@@ -122,6 +124,14 @@ class LcAct(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Images (B, T, H, W, 3) and state (B, T, 8), oldest frame first, T = n_obs."""
         return self.decode(self.encode(workspace, wrist, state, tasks), with_scale)
+
+    def history_size(self) -> int:
+        """Past steps to keep so the oldest of n_obs frames, obs_stride apart, is in reach."""
+        return self.obs_stride * (self.n_obs - 1) + 1
+
+    def pick_frames(self, history: Sequence) -> list:
+        """The n_obs frames the model sees from a full history (oldest first)."""
+        return list(history)[:: self.obs_stride]
 
     def encode(
         self,

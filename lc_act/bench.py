@@ -86,8 +86,8 @@ def _act(
             torch.from_numpy(workspace), torch.from_numpy(wrist),
             stats.apply_state(torch.from_numpy(state).to(device)).cpu(),
         )
-        episode.history.extend([current] * (model.n_obs if not episode.history else 1))
-    frames = [list(zip(*episodes[i].history)) for i in ids]
+        episode.history.extend([current] * (model.history_size() if not episode.history else 1))
+    frames = [list(zip(*model.pick_frames(episodes[i].history))) for i in ids]
     workspace, wrist, state = (
         torch.stack([torch.stack(f[k]) for f in frames]).to(device) for k in range(3)
     )
@@ -140,7 +140,7 @@ def run_benchmark(
         job = queues[i].popleft()
         pipes[i].send(("reset", job))
         obs, instruction, max_steps = pipes[i].recv()
-        episodes[i] = Episode(job, instruction, max_steps, deque(maxlen=model.n_obs))
+        episodes[i] = Episode(job, instruction, max_steps, deque(maxlen=model.history_size()))
         observations[i] = obs
 
     try:

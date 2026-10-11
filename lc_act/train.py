@@ -285,6 +285,7 @@ def save_checkpoint(
         optimizer=optimizer.state_dict(),
         scaler=scaler.state_dict(),
         n_obs=model.n_obs,
+        obs_stride=model.obs_stride,
     )
     _atomic_torch_save(path, checkpoint.to_payload())
 
@@ -309,6 +310,7 @@ def _model_from_checkpoint(
         ClipTextEncoder(),
         horizon=checkpoint.horizon,
         n_obs=checkpoint.n_obs,
+        obs_stride=checkpoint.obs_stride,
     )
     load_trainable(model, checkpoint.trainable)
     return model.to(device), _stats_on_device(checkpoint.stats, device)
@@ -461,13 +463,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         model, stats, checkpoint = load_resume(args.resume, device)
         if checkpoint.n_obs != args.n_obs:
             raise RuntimeError(f"checkpoint has n_obs={checkpoint.n_obs}; pass --n-obs {checkpoint.n_obs}")
+        if checkpoint.obs_stride != OBS_STRIDE:
+            raise RuntimeError(f"checkpoint has obs_stride={checkpoint.obs_stride}; this code uses {OBS_STRIDE}")
         _run_training(
             args, model, loader, stats, checkpoint.tasks, device,
             start_epoch=checkpoint.epoch, start_step=checkpoint.step,
             resume=checkpoint, val_loader=val_loader,
         )
         return
-    model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder(), n_obs=args.n_obs).to(device)
+    model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder(), n_obs=args.n_obs, obs_stride=OBS_STRIDE)
+    model = model.to(device)
     _run_training(args, model, loader, data_stats, tasks, device, val_loader=val_loader)
 
 
