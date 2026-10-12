@@ -134,3 +134,31 @@ The idea is that you are a completely autonomous researcher trying things out. I
 **Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
 
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers cited in MODEL.md, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+
+## Phase 2 (oct12): closed-loop keep metric
+
+Val L1 stopped predicting rollouts. History frames 8 steps apart cut val L1
+by 0.020 (the biggest win of the loop) yet were neutral in closed loop at 10
+minutes and cost four tasks in the long run; 10-minute models already reach
+~89% closed loop against 91.75% for 4 hours. Phase 2 keeps or discards on
+rollouts instead.
+
+**Panel.** Eight tasks, init states 0–9 each (80 rollouts, ~25 min with 2 envs):
+
+- target (Goal/Long, where MINERVA leads by 5–10 points): `libero_10/8` (both
+  moka pots), `libero_10/7`, `libero_10/6`, `libero_goal/3` (top drawer + bowl),
+  `libero_goal/0` (middle drawer), `libero_goal/6`
+- guard (tasks the stride/FiLM run broke): `libero_spatial/5`, `libero_object/1`
+
+**Run.** 40 minutes of training (`--budget-seconds 2400`, holdout split, so
+val L1 is still printed), then `lc_act.bench --tasks <panel> --episodes 10`.
+Same inits for every experiment, so results compare pair by pair.
+
+**Keep** when the 60 target rollouts gain at least 3 successes over the
+champion and the 20 guard rollouts lose at most 2. Record target, guard,
+paired wins/losses and val L1 in `results.tsv`.
+
+**Order.** (1) baseline: language FiLM in every stage + stride 8; (2) stride 1;
+(3) stride 4; (4) LIBERO-Long oversampled 3x; (5) larger action decoder;
+(6) uncertainty ensembling on the best checkpoint (bench flag only). Then a
+4.5-hour run of the winner and the full four-suite bench (20 per task).
