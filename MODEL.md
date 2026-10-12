@@ -74,6 +74,8 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 
 Current weights: `outputs/lc_act_all40/last.pt` (2026-09-27, commit `3378ba0`, all 40 tasks, 4 h / 40 epochs, ~11M samples). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 95.5, Object 98.0, Goal 91.0, Long 82.5, **average 91.75%** (MINERVA-9.66M: 97.45). The misses concentrate in drawers and multi-step tasks (Long 8 at 25%, Goal 3 at 55%).
 
+Follow-up weights: `outputs/lc_act_oct11/last.pt` (2026-10-12, stage FiLM + stride-8 history, 4.5 h / 44 epochs): 92.5 / 95.5 / 93.0 / 84.5, average 91.38% — a tie; Goal and Long improved, Spatial and Object regressed. With `--ensemble uncertainty`: 89.38% (paired 24 wins / 40 losses vs decay), so uncertainty weighting is not used.
+
 Older Object-only weights: `outputs/lc_act/last.pt` (commit `be73e88`, single frame): 95% over the 10 Object tasks with `lc_act.eval` (no step cap).
 
 ## Data and eval

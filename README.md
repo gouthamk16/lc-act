@@ -183,6 +183,17 @@ The next candidate change is language FiLM inside every ResNet stage (MINERVA
 conditions its encoder on the task; ours only modulates tokens after the
 ResNet), stashed as `stage FiLM from language` and not yet trained.
 
+**Follow-up run (2026-10-12).** Language FiLM in every ResNet stage plus
+history frames 8 steps apart, 4.5 hours (`outputs/lc_act_oct11/last.pt`):
+Spatial 92.5, Object 95.5, Goal 93.0, Long 84.5, average **91.38%** — a tie
+overall, but it fixed the targeted failures (both moka pots 25 → 55%, top
+drawer 55 → 80%, middle drawer 75 → 95%) while breaking four tasks that used
+to work (Spatial 5 90 → 65%, Object 1 100 → 85%). Uncertainty-weighted
+ensembling on that model scored 89.38%, worse than plain decay ensembling
+(paired 24 wins to 40 losses, nearly all on Long), so the default stays decay.
+The next phase keeps changes on closed-loop panel success instead of val L1;
+see `program.md`.
+
 The autoresearch log is `artifacts/results.tsv`; per-task rates are in
 `outputs/lc_act_all40/bench20_decay.json`.
 
