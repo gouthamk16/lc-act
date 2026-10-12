@@ -161,27 +161,29 @@ integration.
 
 ## Results
 
-Current weights: `outputs/lc_act_all40/last.pt` (commit `3378ba0`; all 40
-tasks, two frames, DINOv2 alignment; 4-hour run, 40 epochs, ~11M samples, on
-an RTX 4060 Laptop 8 GB). Benchmarked with `lc_act.bench`: every task of the
-four suites, init states 0–19 (800 rollouts), LeRobot step caps, replan every
-step with temporal ensembling.
+Current weights: `outputs/lc_act_film40/last.pt` — language FiLM in every
+ResNet stage, two adjacent frames, DINOv2 alignment, **40 minutes** of
+training (on the 90% autoresearch split). Benchmarked with `lc_act.bench`:
+every task of the four suites, init states 0–19 (800 rollouts), LeRobot step
+caps, replan every step with temporal ensembling.
 
-| Suite | LC-ACT 7.7M (20 per task) | MINERVA-9.66M (50 per task) | π₀.₅ via LeRobot |
+| Suite | LC-ACT 8.0M (20 per task) | MINERVA-9.66M (50 per task) | π₀.₅ via LeRobot |
 | --- | --- | --- | --- |
-| Spatial | 95.5% | 98.4% | 97.0% |
-| Object | 98.0% | 99.0% | 99.0% |
-| Goal | 91.0% | 98.4% | 98.0% |
-| Long | 82.5% | 94.0% | 96.0% |
-| **Average** | **91.75%** | 97.45% | 97.5% |
+| Spatial | 97.5% | 98.4% | 97.0% |
+| Object | 92.0% | 99.0% | 99.0% |
+| Goal | **99.0%** | 98.4% | 98.0% |
+| Long | 88.5% | 94.0% | 96.0% |
+| **Average** | **94.25%** | 97.45% | 97.5% |
 
-This does not beat MINERVA yet: the gap is 1–3 points on Spatial and Object
-and 7–12 points on Goal and Long. The weakest tasks are Long 8 (25%), Goal 3
-"open the top drawer and put the bowl inside" (55%), Long 7 (70%) and Goal 0
-"open the middle drawer of the cabinet" (75%): drawers and multi-step tasks.
-The next candidate change is language FiLM inside every ResNet stage (MINERVA
-conditions its encoder on the task; ours only modulates tokens after the
-ResNet), stashed as `stage FiLM from language` and not yet trained.
+Goal now beats MINERVA; the average is 3.2 points behind it. Object loses
+most to one task, tomato sauce (40%, likely confused with the bbq sauce and
+ketchup bottles), and Long to the mug and microwave tasks (80–85%).
+
+Longer training made things worse. The same configuration trained for 4.5
+hours scored 89.25% (Spatial 88.5, Object 91.0): per-stage language FiLM
+overfits with long training even though it fixes the Goal and Long failures
+early. The earlier 4-hour model without it (`outputs/lc_act_all40`, Sept 26)
+scored 91.75%.
 
 **Follow-up run (2026-10-12).** Language FiLM in every ResNet stage plus
 history frames 8 steps apart, 4.5 hours (`outputs/lc_act_oct11/last.pt`):
@@ -210,6 +212,10 @@ History:
 - 2026-09-24: an autoresearch pass shrank the model to 7.6M trainable
   parameters (128 px, 256-wide transformer) while raising all-task success from
   62% to 86% open-loop, and 95% with temporal ensembling.
+- 2026-10-12: language FiLM in every ResNet stage, chosen by a closed-loop
+  panel instead of val L1, and trained 40 minutes instead of hours: 94.25%.
+  History frames 8 steps apart had won val L1 by the widest margin of the
+  loop and cost closed-loop success (panel 48 vs 56 of 60).
 - 2026-09-27: all 40 tasks from a JPEG frame cache (830 vs 220 samples/s),
   two-frame history, batch 64, and training-only alignment to frozen DINOv2
   features of the current frame and the frame one chunk ahead. 91.75% over the

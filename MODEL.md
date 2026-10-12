@@ -72,7 +72,9 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 | Inference total | 7,962,318 | |
 | Train memory | 1.7 GB peak at batch 64 (RTX 4060 Laptop 8 GB) | |
 
-Current weights: `outputs/lc_act_all40/last.pt` (2026-09-27, commit `3378ba0`, all 40 tasks, 4 h / 40 epochs, ~11M samples). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 95.5, Object 98.0, Goal 91.0, Long 82.5, **average 91.75%** (MINERVA-9.66M: 97.45). The misses concentrate in drawers and multi-step tasks (Long 8 at 25%, Goal 3 at 55%).
+Current weights: `outputs/lc_act_film40/last.pt` (2026-10-12, stage FiLM, stride 1, 40 minutes on the 90% autoresearch split). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 97.5, Object 92.0, Goal 99.0, Long 88.5, **average 94.25%** (MINERVA-9.66M: 97.45; Goal beats its 98.4). Weakest: tomato sauce 40%, mug-in-microwave 80%.
+
+Earlier: `outputs/lc_act_all40/last.pt` (2026-09-27, no stage FiLM, 4 h): 95.5 / 98.0 / 91.0 / 82.5, average 91.75%. `outputs/lc_act_oct12/last.pt` (this config trained 4.5 h): 88.5 / 91.0 / 92.0 / 85.5, average 89.25% — long training overfits the per-stage language conditioning.
 
 Follow-up weights: `outputs/lc_act_oct11/last.pt` (2026-10-12, stage FiLM + stride-8 history, 4.5 h / 44 epochs): 92.5 / 95.5 / 93.0 / 84.5, average 91.38% — a tie; Goal and Long improved, Spatial and Object regressed. With `--ensemble uncertainty`: 89.38% (paired 24 wins / 40 losses vs decay), so uncertainty weighting is not used.
 
