@@ -159,6 +159,6 @@ champion and the 20 guard rollouts lose at most 2. Record target, guard,
 paired wins/losses and val L1 in `results.tsv`.
 
 **Order.** (1) baseline: language FiLM in every stage + stride 8; (2) stride 1;
-(3) stride 4; (4) LIBERO-Long oversampled 3x; (5) larger action decoder;
-(6) uncertainty ensembling on the best checkpoint (bench flag only). Then a
+(3) stride 4; (4) LIBERO-Long oversampled 3x; (5) larger action decoder. (Uncertainty ensembling was dropped: 89.38% vs
+91.38% for decay on the full 800-rollout bench.) Then a
 4.5-hour run of the winner and the full four-suite bench (20 per task).
