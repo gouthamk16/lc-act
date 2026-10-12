@@ -61,6 +61,7 @@ class Checkpoint:
     scaler: dict[str, Any] | None = None
     n_obs: int = 1
     obs_stride: int = 1
+    n_decoder_layers: int = N_DECODER_LAYERS
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -79,6 +80,7 @@ class Checkpoint:
             "scaler": self.scaler,
             "n_obs": self.n_obs,
             "obs_stride": self.obs_stride,
+            "n_decoder_layers": self.n_decoder_layers,
         }
 
     @classmethod
@@ -103,6 +105,8 @@ class Checkpoint:
             scaler=payload.get("scaler"),
             n_obs=int(payload.get("n_obs", 1)),
             obs_stride=int(payload.get("obs_stride", 1)),
+            # Checkpoints from before the field existed all had two decoder layers.
+            n_decoder_layers=int(payload.get("n_decoder_layers", 2)),
         )
 
 

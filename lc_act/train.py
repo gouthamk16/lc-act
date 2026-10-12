@@ -286,6 +286,7 @@ def save_checkpoint(
         scaler=scaler.state_dict(),
         n_obs=model.n_obs,
         obs_stride=model.obs_stride,
+        n_decoder_layers=model.n_decoder_layers,
     )
     _atomic_torch_save(path, checkpoint.to_payload())
 
@@ -311,6 +312,7 @@ def _model_from_checkpoint(
         horizon=checkpoint.horizon,
         n_obs=checkpoint.n_obs,
         obs_stride=checkpoint.obs_stride,
+        n_decoder_layers=checkpoint.n_decoder_layers,
     )
     load_trainable(model, checkpoint.trainable)
     return model.to(device), _stats_on_device(checkpoint.stats, device)

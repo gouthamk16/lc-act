@@ -92,6 +92,7 @@ class LcAct(nn.Module):
         self.horizon = horizon
         self.n_obs = n_obs
         self.obs_stride = obs_stride
+        self.n_decoder_layers = n_decoder_layers
         # History frames are fused per token by channel concat, so the token count stays fixed.
         self.vision_proj = nn.Linear(n_obs * RESNET_DIM, d_model)
         self.text_proj = nn.Linear(CLIP_DIM, d_model)
