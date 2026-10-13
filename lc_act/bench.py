@@ -38,6 +38,24 @@ class Episode:
     step: int = 0
 
 
+class ModelEnsemble(torch.nn.Module):
+    """Averages the chunks of independently trained models that share inputs and normalization."""
+
+    def __init__(self, models: list[torch.nn.Module]) -> None:
+        super().__init__()
+        first = models[0]
+        if any((m.n_obs, m.obs_stride) != (first.n_obs, first.obs_stride) for m in models):
+            raise ValueError("ensemble members need the same n_obs and obs_stride")
+        self.members = torch.nn.ModuleList(models)
+        self.n_obs = first.n_obs
+        self.history_size, self.pick_frames = first.history_size, first.pick_frames
+
+    def forward(self, *inputs, with_scale: bool = False):
+        outs = [member(*inputs, with_scale=True) for member in self.members]
+        actions = torch.stack([a for a, _ in outs]).mean(0)
+        return (actions, torch.stack([s for _, s in outs]).mean(0)) if with_scale else actions
+
+
 def _observe(obs: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     workspace = np.ascontiguousarray(flip_hw(np.asarray(obs["pixels"]["image"])))
     wrist = np.ascontiguousarray(flip_hw(np.asarray(obs["pixels"]["image2"])))
@@ -187,7 +205,7 @@ def summarize(results: dict[Job, tuple[bool, int]]) -> dict:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark LC-ACT on LIBERO suites")
-    parser.add_argument("--ckpt", type=Path, required=True)
+    parser.add_argument("--ckpt", type=Path, nargs="+", required=True, help="several: average their chunks")
     parser.add_argument("--suites", nargs="+", default=list(SUITE_NAMES), choices=SUITE_NAMES)
     parser.add_argument("--tasks", nargs="+", default=None, help="only these, as suite/task_id (e.g. libero_10/8)")
     parser.add_argument("--episodes", type=int, default=50, help="init states per task")
@@ -202,7 +220,13 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     args = parse_args(argv)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, stats = load_checkpoint(args.ckpt, device)
+    loaded = [load_checkpoint(path, device) for path in args.ckpt]
+    model, stats = loaded[0]
+    if len(loaded) > 1:
+        # Members act in one normalized space, so they must share statistics (same training split).
+        if any(not torch.allclose(s.action_mean, stats.action_mean) for _, s in loaded):
+            raise ValueError("ensemble members were normalized differently; train them on the same split")
+        model = ModelEnsemble([m for m, _ in loaded])
     picked = [(suite, task) for suite in args.suites for task in range(10)]
     if args.tasks:
         picked = [(suite, int(task)) for suite, task in (name.split("/") for name in args.tasks)]
