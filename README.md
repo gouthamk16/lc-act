@@ -175,7 +175,11 @@ caps, replan every step with temporal ensembling.
 | Long | 88.5% | 94.0% | 96.0% |
 | **Average** | **94.25%** | 97.45% | 97.5% |
 
-Goal now beats MINERVA; the average is 3.2 points behind it. Object loses
+Goal now beats MINERVA; the average is 3.2 points behind it. **Caveat:**
+closed-loop success varies a lot between training runs. The same
+configuration trained 40 minutes on all the data scored 89.75% (Long 70.5%),
+and 80 minutes scored 86.88%, so 94.25% is likely a good draw rather than the
+configuration's typical result. A seed replicate is the next measurement. Object loses
 most to one task, tomato sauce (40%, likely confused with the bbq sauce and
 ketchup bottles), and Long to the mug and microwave tasks (80–85%).
 
