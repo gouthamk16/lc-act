@@ -189,6 +189,12 @@ inference against MINERVA's 9.66M, and it is measured on 20 init states per task
 rather than MINERVA's 50. The weaker all-data runs (40 minutes: 89.75%, Long 70.5%;
 80 minutes: 86.88%) are not explained by seed variance and remain open.
 
+Adding a third seed (`outputs/ar_ckpt/p2s1_seed2/last.pt`, 23.9M at inference)
+scored 99.0 / 97.5 / 98.0 / 92.5, **96.75%**: ensembling has saturated. The
+remaining failures are shared by every seed — both moka pots on the stove
+(70%), mug on plate plus pudding (85%), salad dressing in basket (85%) — so they
+are systematic, not seed noise.
+
 Longer training made things worse. The same configuration trained for 4.5
 hours scored 89.25% (Spatial 88.5, Object 91.0): per-stage language FiLM
 overfits with long training even though it fixes the Goal and Long failures
@@ -228,6 +234,7 @@ History:
   loop and cost closed-loop success (panel 48 vs 56 of 60).
 - 2026-10-14: a second seed of the same configuration scored 95.00%, and
   averaging the two models' chunks scored 96.62% (Long 92.0%).
+  A third seed added only 0.13 points (96.75%).
 - 2026-09-27: all 40 tasks from a JPEG frame cache (830 vs 220 samples/s),
   two-frame history, batch 64, and training-only alignment to frozen DINOv2
   features of the current frame and the frame one chunk ahead. 91.75% over the
