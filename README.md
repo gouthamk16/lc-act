@@ -165,23 +165,29 @@ Current weights: `outputs/lc_act_film40/last.pt` — language FiLM in every
 ResNet stage, two adjacent frames, DINOv2 alignment, **40 minutes** of
 training (on the 90% autoresearch split). Benchmarked with `lc_act.bench`:
 every task of the four suites, init states 0–19 (800 rollouts), LeRobot step
-caps, replan every step with temporal ensembling.
+caps, replan every step with temporal ensembling. The ensemble column averages
+the action chunks of that model and a second seed of the same configuration
+(`outputs/ar_ckpt/p2s1_seed1/last.pt`):
 
-| Suite | LC-ACT 8.0M (20 per task) | MINERVA-9.66M (50 per task) | π₀.₅ via LeRobot |
-| --- | --- | --- | --- |
-| Spatial | 97.5% | 98.4% | 97.0% |
-| Object | 92.0% | 99.0% | 99.0% |
-| Goal | **99.0%** | 98.4% | 98.0% |
-| Long | 88.5% | 94.0% | 96.0% |
-| **Average** | **94.25%** | 97.45% | 97.5% |
+```bash
+python -m lc_act.bench --ckpt outputs/lc_act_film40/last.pt outputs/ar_ckpt/p2s1_seed1/last.pt --episodes 20
+```
 
-Goal now beats MINERVA; the average is 3.2 points behind it. **Caveat:**
-closed-loop success varies a lot between training runs. The same
-configuration trained 40 minutes on all the data scored 89.75% (Long 70.5%),
-and 80 minutes scored 86.88%, so 94.25% is likely a good draw rather than the
-configuration's typical result. A seed replicate is the next measurement. Object loses
-most to one task, tomato sauce (40%, likely confused with the bbq sauce and
-ketchup bottles), and Long to the mug and microwave tasks (80–85%).
+| Suite | LC-ACT 8.0M seed 0 | seed 1 | 2-seed ensemble (16.0M) | MINERVA-9.66M (50 per task) | π₀.₅ via LeRobot |
+| --- | --- | --- | --- | --- | --- |
+| Spatial | 97.5% | 97.5% | 98.0% | 98.4% | 97.0% |
+| Object | 92.0% | 95.0% | 97.5% | 99.0% | 99.0% |
+| Goal | 99.0% | 98.5% | **99.0%** | 98.4% | 98.0% |
+| Long | 88.5% | 89.0% | 92.0% | 94.0% | 96.0% |
+| **Average** | 94.25% | 95.00% | **96.62%** | 97.45% | 97.5% |
+
+The configuration reproduces: two seeds score 94.25% and 95.00%. They fail on
+different tasks (tomato sauce 40% vs 95%, `libero_object/2` 95% vs 70%), which
+is why averaging their chunks gains 1.6 points over the better seed. The
+ensemble is 0.83 points behind MINERVA, but it runs 16.0M parameters at
+inference against MINERVA's 9.66M, and it is measured on 20 init states per task
+rather than MINERVA's 50. The weaker all-data runs (40 minutes: 89.75%, Long 70.5%;
+80 minutes: 86.88%) are not explained by seed variance and remain open.
 
 Longer training made things worse. The same configuration trained for 4.5
 hours scored 89.25% (Spatial 88.5, Object 91.0): per-stage language FiLM
@@ -201,7 +207,7 @@ The next phase keeps changes on closed-loop panel success instead of val L1;
 see `program.md`.
 
 The autoresearch log is `artifacts/results.tsv`; per-task rates are in
-`outputs/lc_act_all40/bench20_decay.json`.
+`outputs/ens_film40_s0s1/bench20_decay.json`.
 
 The earlier Object-only model (`outputs/lc_act/last.pt`, commit `be73e88`)
 scored 95% on the ten Object tasks, measured without a step cap.
@@ -220,6 +226,8 @@ History:
   panel instead of val L1, and trained 40 minutes instead of hours: 94.25%.
   History frames 8 steps apart had won val L1 by the widest margin of the
   loop and cost closed-loop success (panel 48 vs 56 of 60).
+- 2026-10-14: a second seed of the same configuration scored 95.00%, and
+  averaging the two models' chunks scored 96.62% (Long 92.0%).
 - 2026-09-27: all 40 tasks from a JPEG frame cache (830 vs 220 samples/s),
   two-frame history, batch 64, and training-only alignment to frozen DINOv2
   features of the current frame and the frame one chunk ahead. 91.75% over the

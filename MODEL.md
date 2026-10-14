@@ -72,7 +72,7 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 | Inference total | 7,962,318 | |
 | Train memory | 1.7 GB peak at batch 64 (RTX 4060 Laptop 8 GB) | |
 
-Current weights: `outputs/lc_act_film40/last.pt` (2026-10-12, stage FiLM, stride 1, 40 minutes on the 90% autoresearch split). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 97.5, Object 92.0, Goal 99.0, Long 88.5, **average 94.25%** (MINERVA-9.66M: 97.45; Goal beats its 98.4). Weakest: tomato sauce 40%, mug-in-microwave 80%. Run-to-run variance is large: the same config for 40 minutes on all data scored 89.75% (Long 70.5), and 80 minutes 86.88%, so treat 94.25% as an upper draw until seed replicates exist.
+Current weights: `outputs/lc_act_film40/last.pt` (2026-10-12, stage FiLM, stride 1, 40 minutes on the 90% autoresearch split). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 97.5, Object 92.0, Goal 99.0, Long 88.5, **average 94.25%**. A second seed (`outputs/ar_ckpt/p2s1_seed1/last.pt`) scored 97.5 / 95.0 / 98.5 / 89.0, **95.00%**, so the configuration reproduces; the weaker all-data runs (89.75% at 40 minutes, 86.88% at 80) are unexplained. The seeds fail on different tasks (tomato sauce 40 vs 95%), and averaging their chunks (`--ckpt` with both) scores 98.0 / 97.5 / 99.0 / 92.0, **96.62%**, against MINERVA-9.66M's 97.45, at 16.0M inference parameters.
 
 Earlier: `outputs/lc_act_all40/last.pt` (2026-09-27, no stage FiLM, 4 h): 95.5 / 98.0 / 91.0 / 82.5, average 91.75%. `outputs/lc_act_oct12/last.pt` (this config trained 4.5 h): 88.5 / 91.0 / 92.0 / 85.5, average 89.25% — long training overfits the per-stage language conditioning.
 
