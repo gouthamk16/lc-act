@@ -50,6 +50,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 BASE_LR = 1.2e-3
 ALIGN_WEIGHT = 0.5
+PROGRESS_WEIGHT = 0.0
 # Gap in env steps between history frames.
 OBS_STRIDE = 1
 LONG_WEIGHT = 1.0
@@ -101,6 +102,7 @@ def _move_batch(batch: Batch, device: torch.device) -> Batch:
         action=batch.action.to(device),
         tasks=batch.tasks,
         teacher=None if batch.teacher is None else batch.teacher.to(device),
+        progress=None if batch.progress is None else batch.progress.to(device),
     )
 
 
@@ -123,6 +125,8 @@ def _train_batch(
         if batch.teacher is not None:
             predicted = model.teacher_prediction(memory).float()
             loss = loss + ALIGN_WEIGHT * (1 - F.cosine_similarity(predicted, batch.teacher, dim=-1)).mean()
+        if PROGRESS_WEIGHT > 0 and batch.progress is not None:
+            loss = loss + PROGRESS_WEIGHT * (model.progress_prediction(memory).float() - batch.progress).abs().mean()
     scaler.scale(loss).backward()
     scaler.step(optimizer)
     scaler.update()

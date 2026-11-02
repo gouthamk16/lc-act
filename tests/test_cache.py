@@ -62,6 +62,13 @@ def test_load_cached_holdout_keeps_val_out_of_train(tmp_path):
     assert val.rows.tolist() == [8]
 
 
+def test_progress_runs_from_zero_to_one_within_each_episode(tmp_path):
+    _fake_cache(tmp_path, [0, 0, 0, 1, 1])
+    train, _, stats, _ = load_cached(tmp_path)
+    data = CachedLibero(tmp_path, np.arange(5), stats, train.tasks)
+    assert [round(float(data[i].progress), 2) for i in range(5)] == [0.0, 0.5, 1.0, 0.0, 1.0]
+
+
 def test_strided_history_reaches_back_and_clamps_at_episode_start(tmp_path):
     _fake_cache(tmp_path, [0] * 12)
     train, _, stats, _ = load_cached(tmp_path, n_obs=2)

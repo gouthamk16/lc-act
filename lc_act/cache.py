@@ -206,6 +206,7 @@ class CachedLibero(torch.utils.data.Dataset):
             teacher=None if self.teacher is None else torch.from_numpy(
                 self.teacher[[row, chunk[-1]]].astype(np.float32)
             ),
+            progress=torch.tensor((row - self.first[row]) / max(self.last[row] - self.first[row], 1), dtype=torch.float32),
         )
 
 

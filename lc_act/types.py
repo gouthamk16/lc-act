@@ -118,3 +118,4 @@ class Batch:
     action: torch.Tensor
     tasks: list[str]
     teacher: torch.Tensor | None = None
+    progress: torch.Tensor | None = None

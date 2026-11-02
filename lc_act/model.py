@@ -50,7 +50,8 @@ def trainable_state_dict(model: "LcAct") -> dict[str, torch.Tensor]:
 
 def load_trainable(model: "LcAct", state_dict: dict[str, torch.Tensor]) -> "LcAct":
     result = model.load_state_dict(state_dict, strict=False)
-    missing = [key for key in result.missing_keys if not key.startswith("text.")]
+    # progress_head is training-only and absent from older checkpoints.
+    missing = [key for key in result.missing_keys if not key.startswith(("text.", "progress_head."))]
     if missing:
         raise RuntimeError(f"checkpoint missing trainable keys: {missing}")
     return model
@@ -114,6 +115,8 @@ class LcAct(nn.Module):
         nn.init.zeros_(self.stage_film.bias)
         # Training-only: predict frozen DINOv2 features of this frame and of the frame one chunk ahead.
         self.align = nn.ModuleList([_teacher_head(d_model) for _ in range(2)])
+        # Training-only: how far through its demo this frame is, so Long-task tokens carry which phase they are in.
+        self.progress_head = nn.Linear(d_model, 1)
 
     def forward(
         self,
@@ -162,6 +165,9 @@ class LcAct(nn.Module):
         """(B, 2 times, 2 cameras, TEACHER_DIM) from each camera's mean-pooled encoder tokens."""
         per_camera = memory[:, : memory.shape[1] - 2].unflatten(1, (2, -1)).mean(2)
         return torch.stack([head(per_camera) for head in self.align], dim=1)
+
+    def progress_prediction(self, memory: torch.Tensor) -> torch.Tensor:
+        return self.progress_head(memory.mean(1)).squeeze(-1)
 
     def _modulate(self, tokens: torch.Tensor, lang: torch.Tensor) -> torch.Tensor:
         gamma, beta = self.film(lang).chunk(2, dim=-1)

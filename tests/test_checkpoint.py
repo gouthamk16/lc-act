@@ -60,6 +60,26 @@ def test_load_trainable_rejects_missing_camera_embed():
         load_trainable(model, weights)
 
 
+def test_load_trainable_accepts_checkpoints_without_progress_head():
+    model = LcAct(FakeVision(), FakeText())
+    weights = {k: v for k, v in trainable_state_dict(model).items() if not k.startswith("progress_head.")}
+    load_trainable(model, weights)
+
+
+def test_progress_loss_trains_when_weighted(tmp_path, monkeypatch):
+    import lc_act.train as train
+
+    monkeypatch.setattr(train, "PROGRESS_WEIGHT", 1.0)
+    model = LcAct(FakeVision(), FakeText())
+    before = model.progress_head.weight.detach().clone()
+    frames = torch.zeros(2, 1, 8, 8, 3, dtype=torch.uint8)
+    batch = Batch(frames, frames, torch.zeros(2, 1, 8), torch.zeros(2, 16, 7), ["soup", "soup"],
+                  progress=torch.tensor([0.0, 1.0]))
+    args = parse_args(["--budget-steps", "2", "--out", str(tmp_path)])
+    _run_training(args, model, [batch], _stats(), ["soup"], torch.device("cpu"))
+    assert not torch.equal(before, model.progress_head.weight)
+
+
 def test_max_hours_zero_means_no_deadline():
     args = parse_args(["--max-hours", "0"])
     assert training_deadline(args.max_hours, now=10.0) is None
