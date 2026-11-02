@@ -3,8 +3,8 @@ import torch
 from torch import nn
 
 from lc_act.model import LcAct, load_trainable, trainable_state_dict
-from lc_act.train import parse_args, training_deadline
-from lc_act.types import CLIP_DIM, RESNET_DIM, Checkpoint, NormalizeStats
+from lc_act.train import _run_training, parse_args, training_deadline
+from lc_act.types import CLIP_DIM, RESNET_DIM, Batch, Checkpoint, NormalizeStats
 
 
 class FakeVision(nn.Module):
@@ -69,6 +69,15 @@ def test_budget_seconds_and_val_batches_parse():
     args = parse_args(["--budget-seconds", "300", "--val-batches", "4"])
     assert args.budget_seconds == 300.0
     assert args.val_batches == 4
+
+
+def test_budget_steps_stops_at_that_step_across_epochs(tmp_path):
+    frames = torch.zeros(2, 1, 8, 8, 3, dtype=torch.uint8)
+    batch = Batch(frames, frames, torch.zeros(2, 1, 8), torch.zeros(2, 16, 7), ["soup", "soup"])
+    args = parse_args(["--budget-steps", "5", "--out", str(tmp_path)])
+    _run_training(args, LcAct(FakeVision(), FakeText()), [batch, batch], _stats(), ["soup"], torch.device("cpu"))
+    saved = Checkpoint.from_payload(torch.load(tmp_path / "last.pt", weights_only=False))
+    assert saved.step == 5
 
 
 def test_object_only_and_n_obs_parse():

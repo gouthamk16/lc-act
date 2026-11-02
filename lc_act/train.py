@@ -39,6 +39,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--cache", type=Path, default=None, help="frame cache dir (python -m lc_act.cache)")
     parser.add_argument("--budget-seconds", type=float, default=None)
+    parser.add_argument("--budget-steps", type=int, default=None, help="like --budget-seconds, but machine-independent")
     parser.add_argument("--val-batches", type=int, default=1000)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=0)
@@ -358,16 +359,20 @@ def _run_training(
     if resume is not None and resume.scaler is not None:
         scaler.load_state_dict(resume.scaler)
     budget = args.budget_seconds
-    if budget is not None and device.type == "cuda":
+    steps_budget = args.budget_steps
+    fixed = budget is not None or steps_budget is not None
+    if fixed and device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
     deadline_box: list[float | None] = [
-        None if budget else training_deadline(args.max_hours, started)
+        None if fixed else training_deadline(args.max_hours, started)
     ]
     total_steps = max(args.epochs * len(loader), 1)
 
     def progress(current_step: int) -> float:
         deadline = deadline_box[0]
+        if steps_budget is not None:
+            return current_step / steps_budget
         if budget is not None:
             return 0.0 if deadline is None else 1 - (deadline - time.monotonic()) / budget
         if deadline is not None:
@@ -401,11 +406,11 @@ def _run_training(
                 scaler,
                 device,
                 deadline=deadline_box[0],
-                max_steps=max_steps,
+                max_steps=max_steps if steps_budget is None else steps_budget - step,
                 stop=stop,
                 global_step=step,
-                save_every=0 if budget else args.save_every,
-                persist=None if budget else (lambda current: persist(epoch, current)),
+                save_every=0 if fixed else args.save_every,
+                persist=None if fixed else (lambda current: persist(epoch, current)),
                 deadline_box=deadline_box,
                 budget_seconds=budget,
                 schedule=schedule,
@@ -413,7 +418,7 @@ def _run_training(
         except torch.cuda.OutOfMemoryError:
             print("drop batch to 4 or drop wrist camera")
             sys.exit(1)
-        if budget is None:
+        if not fixed:
             persist(epoch if stop.requested else epoch + 1, step)
         if steps == 0:
             break
@@ -423,7 +428,9 @@ def _run_training(
             f"epoch={epoch} l1={mean_loss:.4f} "
             f"samples/s={samples_per_second:.1f}"
         )
-        if device.type == "cpu" or stop.requested:
+        if (device.type == "cpu" and steps_budget is None) or stop.requested:
+            break
+        if steps_budget is not None and step >= steps_budget:
             break
         if deadline_box[0] is not None and time.monotonic() >= deadline_box[0]:
             break
@@ -438,7 +445,7 @@ def _run_training(
             f"| gpu {peak_gpu_gb(device):.2f}GB"
         )
         print("suites: " + " | ".join(f"{name} {value:.4f}" for name, value in val.per_suite.items()))
-    if budget is not None:
+    if fixed:
         persist(finished_epoch, step)
 
 
@@ -454,7 +461,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     torch.manual_seed(args.seed)
     train_set, val_set, data_stats, tasks = load_cached(
         args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs,
-        holdout=args.budget_seconds is not None, teacher=ALIGN_WEIGHT > 0, obs_stride=OBS_STRIDE,
+        holdout=args.budget_seconds is not None or args.budget_steps is not None, teacher=ALIGN_WEIGHT > 0, obs_stride=OBS_STRIDE,
     )
     # MINERVA: long-horizon demos are the scarce, hard ones; oversample them.
     long_suite = torch.from_numpy(train_set.task_index[train_set.rows] < 10)
