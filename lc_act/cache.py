@@ -159,6 +159,7 @@ class CachedLibero(torch.utils.data.Dataset):
         horizon: int = HORIZON,
         teacher: bool = False,
         obs_stride: int = 1,
+        distill: Path | None = None,
     ) -> None:
         self.root = root
         self.rows = rows
@@ -174,6 +175,8 @@ class CachedLibero(torch.utils.data.Dataset):
         self.total = len(self.task_index)
         self._images: dict[str, tuple[np.memmap, np.ndarray]] = {}
         self.teacher = np.load(root / "teacher.npy", mmap_mode="r") if teacher else None
+        # Raw (unnormalized) ensemble chunks per row, from python -m lc_act.distill.
+        self.distill = None if distill is None else np.load(distill, mmap_mode="r")
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -206,6 +209,9 @@ class CachedLibero(torch.utils.data.Dataset):
             teacher=None if self.teacher is None else torch.from_numpy(
                 self.teacher[[row, chunk[-1]]].astype(np.float32)
             ),
+            distill=None if self.distill is None else self.stats.apply_action(
+                torch.from_numpy(self.distill[row].astype(np.float32))
+            ),
         )
 
 
@@ -234,6 +240,7 @@ def load_cached(
     holdout: bool = False,
     teacher: bool = False,
     obs_stride: int = 1,
+    distill: Path | None = None,
 ) -> tuple[CachedLibero, CachedLibero | None, NormalizeStats, list[str]]:
     if not (root / "meta.json").exists():
         raise RuntimeError(f"no frame cache at {root}; run python -m lc_act.cache")
@@ -251,7 +258,7 @@ def load_cached(
     chunks = np.minimum(train_rows[:, None] + np.arange(HORIZON), last[train_rows, None])
     actions = torch.from_numpy(np.load(root / "action.npy"))[chunks]
     stats = NormalizeStats.from_tensors(state, actions)
-    train = CachedLibero(root, train_rows, stats, tasks, n_obs, teacher=teacher, obs_stride=obs_stride)
+    train = CachedLibero(root, train_rows, stats, tasks, n_obs, teacher=teacher, obs_stride=obs_stride, distill=distill)
     # Every 8th held-out frame: spread over all val episodes without paying for every frame.
     val = None if val_rows is None else CachedLibero(root, val_rows[::8], stats, tasks, n_obs, obs_stride=obs_stride)
     return train, val, stats, tasks

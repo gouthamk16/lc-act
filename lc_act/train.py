@@ -39,6 +39,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--cache", type=Path, default=None, help="frame cache dir (python -m lc_act.cache)")
     parser.add_argument("--budget-seconds", type=float, default=None)
+    parser.add_argument("--distill", type=Path, default=None, help="ensemble chunks from python -m lc_act.distill")
     parser.add_argument("--budget-steps", type=int, default=None, help="like --budget-seconds, but machine-independent")
     parser.add_argument("--val-batches", type=int, default=1000)
     parser.add_argument("--workers", type=int, default=6)
@@ -50,6 +51,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 BASE_LR = 1.2e-3
 ALIGN_WEIGHT = 0.5
+# Share of the action loss aimed at the ensemble's chunks when training with --distill.
+DISTILL_WEIGHT = 0.5
 # Gap in env steps between history frames.
 OBS_STRIDE = 1
 LONG_WEIGHT = 1.0
@@ -101,6 +104,7 @@ def _move_batch(batch: Batch, device: torch.device) -> Batch:
         action=batch.action.to(device),
         tasks=batch.tasks,
         teacher=None if batch.teacher is None else batch.teacher.to(device),
+        distill=None if batch.distill is None else batch.distill.to(device),
     )
 
 
@@ -118,8 +122,11 @@ def _train_batch(
         prediction, log_scale = model.decode(memory, with_scale=True)
         error = (prediction - batch.action).abs()
         l1 = error.mean()
+        fit = l1
+        if batch.distill is not None:
+            fit = (1 - DISTILL_WEIGHT) * l1 + DISTILL_WEIGHT * (prediction - batch.distill).abs().mean()
         # Laplace NLL on the detached residual: trains only the scale head.
-        loss = l1 + (error.detach() * torch.exp(-log_scale) + log_scale).mean()
+        loss = fit + (error.detach() * torch.exp(-log_scale) + log_scale).mean()
         if batch.teacher is not None:
             predicted = model.teacher_prediction(memory).float()
             loss = loss + ALIGN_WEIGHT * (1 - F.cosine_similarity(predicted, batch.teacher, dim=-1)).mean()
@@ -461,7 +468,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     torch.manual_seed(args.seed)
     train_set, val_set, data_stats, tasks = load_cached(
         args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs,
-        holdout=args.budget_seconds is not None or args.budget_steps is not None, teacher=ALIGN_WEIGHT > 0, obs_stride=OBS_STRIDE,
+        holdout=args.budget_seconds is not None or args.budget_steps is not None, teacher=ALIGN_WEIGHT > 0, obs_stride=OBS_STRIDE, distill=args.distill,
     )
     # MINERVA: long-horizon demos are the scarce, hard ones; oversample them.
     long_suite = torch.from_numpy(train_set.task_index[train_set.rows] < 10)

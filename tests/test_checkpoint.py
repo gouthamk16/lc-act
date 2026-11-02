@@ -80,6 +80,22 @@ def test_budget_steps_stops_at_that_step_across_epochs(tmp_path):
     assert saved.step == 5
 
 
+def test_distill_weight_one_pulls_predictions_to_the_teacher(tmp_path, monkeypatch):
+    import lc_act.train as train
+
+    monkeypatch.setattr(train, "DISTILL_WEIGHT", 1.0)
+    model = LcAct(FakeVision(), FakeText())
+    frames = torch.zeros(2, 1, 8, 8, 3, dtype=torch.uint8)
+    batch = Batch(frames, frames, torch.zeros(2, 1, 8), torch.zeros(2, 16, 7), ["soup", "soup"],
+                  distill=torch.ones(2, 16, 7))
+    args = parse_args(["--budget-steps", "60", "--out", str(tmp_path)])
+    _run_training(args, model, [batch], _stats(), ["soup"], torch.device("cpu"))
+    model.eval()
+    with torch.no_grad():
+        prediction = model(batch.workspace, batch.wrist, batch.state, batch.tasks)
+    assert prediction.mean() > 0.5
+
+
 def test_object_only_and_n_obs_parse():
     assert not parse_args([]).object_only
     args = parse_args(["--object-only", "--n-obs", "2"])

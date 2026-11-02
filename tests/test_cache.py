@@ -62,6 +62,15 @@ def test_load_cached_holdout_keeps_val_out_of_train(tmp_path):
     assert val.rows.tolist() == [8]
 
 
+def test_distill_targets_are_normalized_like_actions(tmp_path):
+    _fake_cache(tmp_path, [0, 0, 0, 1, 1])
+    raw = np.arange(5 * 16 * 7, dtype=np.float16).reshape(5, 16, 7)
+    np.save(tmp_path / "distill.npy", raw)
+    train, _, stats, _ = load_cached(tmp_path, distill=tmp_path / "distill.npy")
+    sample = train[3]
+    assert torch.allclose(stats.invert_action(sample.distill), torch.from_numpy(raw[3]).float(), atol=0.5)
+
+
 def test_strided_history_reaches_back_and_clamps_at_episode_start(tmp_path):
     _fake_cache(tmp_path, [0] * 12)
     train, _, stats, _ = load_cached(tmp_path, n_obs=2)
