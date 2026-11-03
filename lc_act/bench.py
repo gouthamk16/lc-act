@@ -209,10 +209,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--suites", nargs="+", default=list(SUITE_NAMES), choices=SUITE_NAMES)
     parser.add_argument("--tasks", nargs="+", default=None, help="only these, as suite/task_id (e.g. libero_10/8)")
     parser.add_argument("--episodes", type=int, default=50, help="init states per task")
+    parser.add_argument("--first-init", type=int, default=0, help="start of the init range, to split a bench across runs")
     parser.add_argument("--envs", type=int, default=2, help="each LIBERO env holds ~2.9 GB (MuJoCo arena)")
     parser.add_argument("--ensemble", choices=("decay", "uncertainty"), default="decay")
     parser.add_argument("--out", type=Path, default=None)
     return parser.parse_args(argv)
+
+
+def pick_jobs(args: argparse.Namespace) -> list[Job]:
+    picked = [(suite, task) for suite in args.suites for task in range(10)]
+    if args.tasks:
+        picked = [(suite, int(task)) for suite, task in (name.split("/") for name in args.tasks)]
+    inits = range(args.first_init, args.first_init + args.episodes)
+    return [Job(suite, task, init) for suite, task in picked for init in inits]
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -227,10 +236,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         if any(not torch.allclose(s.action_mean, stats.action_mean) for _, s in loaded):
             raise ValueError("ensemble members were normalized differently; train them on the same split")
         model = ModelEnsemble([m for m, _ in loaded])
-    picked = [(suite, task) for suite in args.suites for task in range(10)]
-    if args.tasks:
-        picked = [(suite, int(task)) for suite, task in (name.split("/") for name in args.tasks)]
-    jobs = [Job(suite, task, init) for suite, task in picked for init in range(args.episodes)]
+    jobs = pick_jobs(args)
     started = time.monotonic()
     results = run_benchmark(model, stats, jobs, args.envs, device, args.ensemble == "uncertainty")
     summary = summarize(results)
