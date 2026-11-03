@@ -152,7 +152,7 @@ def run_episode(
         frames.append(first)
     if on_frame is not None:
         on_frame(first, obs)
-    history: deque[tuple[torch.Tensor, ...]] = deque(maxlen=model.n_obs)
+    history: deque[tuple[torch.Tensor, ...]] = deque(maxlen=model.history_size())
     pending: defaultdict[int, list[torch.Tensor]] = defaultdict(list)
     with torch.inference_mode():
         # Replan every env step; one dataset row is one control step (its 10 fps is a label only).
@@ -160,8 +160,8 @@ def run_episode(
             if stop is not None and stop():
                 return False, frames
             current = obs_to_tensors(obs, stats, device)
-            history.extend([current] * (model.n_obs if not history else 1))
-            workspace, wrist, state = (torch.stack(parts, dim=1) for parts in zip(*history))
+            history.extend([current] * (model.history_size() if not history else 1))
+            workspace, wrist, state = (torch.stack(parts, dim=1) for parts in zip(*model.pick_frames(history)))
             chunk = stats.invert_action(model(workspace, wrist, state, [instruction])[0])
             for offset, action in enumerate(chunk):
                 pending[step + offset].append(action)

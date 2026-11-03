@@ -158,12 +158,14 @@ class CachedLibero(torch.utils.data.Dataset):
         n_obs: int = 1,
         horizon: int = HORIZON,
         teacher: bool = False,
+        obs_stride: int = 1,
     ) -> None:
         self.root = root
         self.rows = rows
         self.stats = stats
         self.tasks = tasks
         self.n_obs = n_obs
+        self.obs_stride = obs_stride
         self.horizon = horizon
         self.state = torch.from_numpy(np.load(root / "state.npy"))
         self.action = torch.from_numpy(np.load(root / "action.npy"))
@@ -191,7 +193,8 @@ class CachedLibero(torch.utils.data.Dataset):
 
     def __getitem__(self, index: int) -> Sample:
         row = int(self.rows[index])
-        history = np.maximum(np.arange(row - self.n_obs + 1, row + 1), self.first[row])
+        offsets = self.obs_stride * np.arange(-(self.n_obs - 1), 1)
+        history = np.maximum(row + offsets, self.first[row])
         chunk = np.minimum(np.arange(row, row + self.horizon), self.last[row])
         return Sample(
             workspace=self._frames("workspace", history),
@@ -230,6 +233,7 @@ def load_cached(
     n_obs: int = 1,
     holdout: bool = False,
     teacher: bool = False,
+    obs_stride: int = 1,
 ) -> tuple[CachedLibero, CachedLibero | None, NormalizeStats, list[str]]:
     if not (root / "meta.json").exists():
         raise RuntimeError(f"no frame cache at {root}; run python -m lc_act.cache")
@@ -247,9 +251,9 @@ def load_cached(
     chunks = np.minimum(train_rows[:, None] + np.arange(HORIZON), last[train_rows, None])
     actions = torch.from_numpy(np.load(root / "action.npy"))[chunks]
     stats = NormalizeStats.from_tensors(state, actions)
-    train = CachedLibero(root, train_rows, stats, tasks, n_obs, teacher=teacher)
+    train = CachedLibero(root, train_rows, stats, tasks, n_obs, teacher=teacher, obs_stride=obs_stride)
     # Every 8th held-out frame: spread over all val episodes without paying for every frame.
-    val = None if val_rows is None else CachedLibero(root, val_rows[::8], stats, tasks, n_obs)
+    val = None if val_rows is None else CachedLibero(root, val_rows[::8], stats, tasks, n_obs, obs_stride=obs_stride)
     return train, val, stats, tasks
 
 

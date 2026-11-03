@@ -2,7 +2,7 @@
 
 **Status:** approved. Canonical card for the code in this folder. If implementation drifts, update this file in the same change.
 
-Language-conditioned action chunking transformer. Small imitation policy for LIBERO (Franka in MuJoCo), 7.7M parameters at inference. Trains on all 40 tasks of the four standard suites by default (`--object-only` for the Object suite). Not a 7B VLA. Not the x500.
+Language-conditioned action chunking transformer. Small imitation policy for LIBERO (Franka in MuJoCo), 8.0M parameters at inference. Trains on all 40 tasks of the four standard suites by default (`--object-only` for the Object suite). Not a 7B VLA. Not the x500.
 
 | | |
 | --- | --- |
@@ -22,7 +22,7 @@ Collapsing each camera to one CLIP vector throws away grasp geometry. ACT and LI
 
 Scratch Diffusion Policy already hits **92.5% Object**. MINERVA reaches 99.6% Object with a 0.54M-parameter policy at 128 px, where L1 regression matched flow matching and replan-every-step temporal ensembling beat long open-loop chunks. We need spatial chunks + L1, not a giant VLM.
 
-Rejected on this 8 GB laptop: OpenVLA-OFT 7B (25–62 GB), SmolVLA (10–16 GB), MiniVLA/TinyVLA VLMs, CLIP-CLS TinyVLA, CVAE, flow matching.
+Rejected on this 8 GB laptop: OpenVLA-OFT 7B (25–62 GB), SmolVLA (10–16 GB), MiniVLA/TinyVLA VLMs, CLIP-CLS TinyVLA, CVAE. Flow matching was rejected early for cost; it is now the main open lever, because L1 regression averages modes at the grasp decision, which fits both remaining Long failures.
 
 ## Architecture
 
@@ -30,7 +30,8 @@ The diagram matches the code, including token tagging.
 
 ```
 workspace RGB 256×256 ──┐  resize to 128×128 (train: ±8 px random shift)
-                        ├── shared ResNet-18 through layer3 (trainable)
+                        ├── shared ResNet-18 through layer3 (trainable),
+                        │   each stage FiLM'd by the language token
 wrist RGB 256×256 ──────┘         │
                                   ▼
                          8×8 spatial tokens per camera (256-d)
@@ -50,7 +51,9 @@ training only:
                                                    and of the frame 15 steps ahead → cosine
 ```
 
-Two observation frames (the default, `--n-obs 2`): each sample carries the previous frame and state (oldest first). Both frames go through the shared ResNet with one shared random shift, and each token concatenates the two frames' 256-d features before the linear projection, so the token count stays the same. The state token projects the 2×8 stacked states.
+Two observation frames (`--n-obs 2`), `OBS_STRIDE` env steps apart (`train.py`, saved in the checkpoint; default 1, adjacent): each sample carries the earlier frame and state plus the current ones (oldest first; at episode start the first frame repeats). Frames 8 steps apart show more progress and won val L1 by the widest margin of the loop, but lost closed loop (panel 48 vs 56 of 60), so the default stays adjacent. Both frames go through the shared ResNet with one shared random shift, and each token concatenates the two frames' 256-d features before the linear projection, so the token count stays the same. The state token projects the 2×8 stacked states. On the 10-minute proxy this cut held-out L1 from 0.3249 to 0.3048 on every suite. Because a history policy can score well offline by extrapolating past motion and then react badly in closed loop ("copycat"), it was checked closed-loop before keeping: 90.0% vs 88.8% on 80 paired rollouts, so no harm, but no clear gain at that budget either.
+
+**Language FiLM in every ResNet stage.** The language token also produces a zero-initialized (γ, β) per channel for the outputs of layer1, layer2 and layer3, so the instruction changes what the vision features pick out, not only how the finished tokens are weighted. Goal-suite tasks share one scene and differ only in the instruction, and that suite moved most (held-out L1 0.3548 → 0.3492; overall 0.3277 → 0.3249). On Object alone (Sept 2026) the same change was neutral, because language barely matters there.
 
 **Teacher alignment and latent foresight (the novel piece).** `python -m lc_act.teacher` runs frozen DINOv2-small once over every cached frame and stores its mean-pooled patch features (420 MB). Training adds a cosine loss (weight 0.5) that makes each camera's pooled encoder tokens predict that feature for the current frame and for the frame one chunk ahead. The first is REPA-style representation alignment; the second asks the encoder to anticipate where the scene is going, which is the part a chunked policy needs. It combines two 2026 results: world-model representation distillation into 0.8B VLAs (cached teacher features, cosine alignment, 95.3 → 97.9% LIBERO) and MINERVA's finding that small LIBERO policies are limited by vision capacity, not size. The heads cost 0.66M parameters in training and nothing at inference. On the 10-minute proxy it improved held-out L1 on all four suites (0.3300 → 0.3273). A spatial variant (4×4 DINOv2 patch grid, PCA-64) tied and was dropped.
 
@@ -63,13 +66,19 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 | Piece | Params | Train? |
 | --- | --- | --- |
 | ResNet-18 through layer3 | 2,782,784 | yes |
-| Projections, tags, FiLM, transformer, action + scale heads | 4,949,262 | yes |
+| Projections, tags, token and stage FiLM, transformer, action + scale heads | 5,179,534 | yes |
 | Teacher-alignment heads | 657,152 | training only |
 | CLIP text | ~63M | frozen |
-| Inference total | 7,732,046 | |
+| Inference total | 7,962,318 | |
 | Train memory | 1.7 GB peak at batch 64 (RTX 4060 Laptop 8 GB) | |
 
-Current weights: `outputs/lc_act_all40/last.pt` (2026-09-27, commit `3378ba0`, all 40 tasks, 4 h / 40 epochs, ~11M samples). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 95.5, Object 98.0, Goal 91.0, Long 82.5, **average 91.75%** (MINERVA-9.66M: 97.45). The misses concentrate in drawers and multi-step tasks (Long 8 at 25%, Goal 3 at 55%).
+Current best: a chunk-averaging ensemble of four models of this configuration, each trained 40 minutes on the laptop or the same 24,656 optimizer steps on a Kaggle T4 (`--budget-steps`), on the 90% autoresearch split, with different seeds: `outputs/lc_act_film40/last.pt`, `outputs/ar_ckpt/p2s1_seed1/last.pt`, `outputs/ar_ckpt/p2s1_seed2/last.pt` and `outputs/kaggle/r2/base_s24k/last.pt`. At MINERVA's protocol (`lc_act.bench`, init states 0–49 per task, 2,000 rollouts): Spatial 97.6, Object 99.6, Goal 98.8, Long 92.6, **average 97.15%**, against MINERVA-9.66M's 97.45, at 31.8M inference parameters (the frozen CLIP text encoder is shared by the members). On init states 0–19 the same ensemble scored 98.12%, so 20 states per task overstated it by a point. Single models of the configuration score 94.25–97.12% on 0–19 (best: `outputs/kaggle/r2/base_s24k/last.pt`, 98.5 / 100 / 99.0 / 91.0). The remaining failures are shared by every member: mug on plate plus pudding (`libero_10/6`, 74%) and both moka pots (`libero_10/8`, 86%).
+
+Tried and lost against that baseline (single model, 0–19): half or 1.5× the steps, peak LR 4e-4, MINERVA-like LR 3e-4 or 1e-4 with 2.5× the steps (94.00%, 93.75%), a training-only progress head (95.38%), and distilling the ensemble into one model (94.50%, 96.25%). Longer training loses at every learning rate.
+
+Earlier: `outputs/lc_act_all40/last.pt` (2026-09-27, no stage FiLM, 4 h): 95.5 / 98.0 / 91.0 / 82.5, average 91.75%. `outputs/lc_act_oct12/last.pt` (this config trained 4.5 h): 88.5 / 91.0 / 92.0 / 85.5, average 89.25% — long training overfits the per-stage language conditioning.
+
+Follow-up weights: `outputs/lc_act_oct11/last.pt` (2026-10-12, stage FiLM + stride-8 history, 4.5 h / 44 epochs): 92.5 / 95.5 / 93.0 / 84.5, average 91.38% — a tie; Goal and Long improved, Spatial and Object regressed. With `--ensemble uncertainty`: 89.38% (paired 24 wins / 40 losses vs decay), so uncertainty weighting is not used.
 
 Older Object-only weights: `outputs/lc_act/last.pt` (commit `be73e88`, single frame): 95% over the 10 Object tasks with `lc_act.eval` (no step cap).
 

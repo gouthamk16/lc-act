@@ -1,0 +1,95 @@
+commit	val_loss	raw_l1	grip_acc	memory_gb	status	description
+07b1a39	0.698700	-	-	1.1	keep	baseline
+e73c460	0.716200	-	-	1.1	discard	add language token to action queries
+f79cb87	0.634700	-	-	1.1	keep	pre-norm encoder/decoder (norm_first=True)
+6d1b4ea	0.629400	-	-	1.1	keep	two-layer action decoder
+04f80af	0.601000	-	-	1.1	keep	FiLM visual tokens from language (zero-init)
+c6f1999	0.663100	-	-	1.1	discard	separate workspace/wrist linear projections
+f6faee1	0.637800	-	-	1.1	discard	four encoder register tokens
+644066e	0.624900	-	-	1.1	discard	FiLM action queries from language
+177f165	0.660600	-	-	1.1	discard	GELU transformer FFN (vs ReLU)
+c7a913f	0.641800	0.155500	0.753	1.1	keep	instrumented champion (raw L1 + gripper acc)
+11abbba	0.666200	0.172100	0.777	1.1	discard	split pose/gripper heads
+7c6e0b0	0.606200	0.146400	0.793	1.2	keep	fifth encoder layer
+9e71016	0.659600	0.141000	0.879	1.3	keep	three decoder layers (raw+grip win despite val)
+c9d0192	0.653800	0.153800	0.845	1.3	discard	upweight gripper L1 in train loss
+f5fdbac	0.718500	0.197700	0.736	1.3	discard	add proprio to action queries
+11a274d	0.625300	0.157400	0.804	1.2	discard	dropout 0 (val down but grip/raw worse)
+29c44eb	0.610200	0.155100	0.832	1.3	discard	extra L1 on first 4 chunk steps
+c509ab5	0.658500	0.167700	0.789	1.3	discard	LayerNorm on encoder memory
+337c7ca	0.690000	0.178900	0.812	1.3	discard	separate workspace/wrist FiLM
+
+
+
+
+
+
+
+
+
+
+737c323	0.396800	0.075500	0.951	1.3	keep	NEW PROTOCOL (4 workers, fused AdamW, seed 0, val = every 8th frame of all held-out eps; eval 1 step/action) champion re-baseline
+737c323	0.4134	0.0776	0.950	1.3	keep	seed-1 noise check of re-baseline
+b59e7d4	0.4063	0.0815	0.948	1.3	discard	freeze ResNet BatchNorm stats (eval-mode BN)
+950d807	0.4050	0.0778	0.952	1.0	keep	128px input + ResNet-18 through layer3 (-8.4M params; val within seed band)
+908c61f	0.4005	0.0785	0.951	1.0	keep	cache CLIP embeddings per instruction (131 samples/s, 4924 steps)
+77bec7e	0.4096	0.0823	0.944	1.0	discard	random-shift aug pad 8 (underfit regime at 5 min; revisit for long runs)
+2cde84a	0.4065	0.0791	0.952	1.0	discard	FiLM each ResNet stage from language (zero-init)
+978a0c2	0.4037	0.0816	0.940	1.0	discard	DCT low-pass pose head K=8 (novel; raw/grip worse)
+f04a534	0.4107	0.0765	0.949	0.6	keep	d_model 256 / FFN 1024 (4x smaller transformer; raw better, val within band)
+4ea3426	0.3727	0.0689	0.953	0.6	keep	warmup 2% + cosine LR decay over the run
+95dfabf	0.3643	0.0644	0.954	0.6	keep	peak LR 3e-4 (cosine)
+362516b	0.3619	0.0631	0.955	0.6	keep	peak LR 6e-4 (marginal, saturating)
+381a497	0.3600	0.0628	0.956	0.6	discard	DETR aux loss on every decoder layer (+0.002, not worth code)
+f522526	0.3608	0.0625	0.956	0.5	keep	3 encoder / 2 decoder layers (faster, val slightly better)
+65d07b8	0.3624	0.0642	0.954	0.4	discard	2 encoder / 1 decoder (raw worse; keep headroom)
+e492d7d	0.3599	0.0623	0.957	0.6	keep	batch 16 + 6 workers (237 samples/s, 1.2 epochs per budget)
+be73e88	0.3590	0.0630	0.953	0.6	keep	random-shift aug pad 8 retried at 1.2 epochs (val -0.001; long-run regularizer)
+21614c4	0.3601	0.0634	0.955	0.6	discard	EMA 0.999 of weights (no gain with cosine-to-zero)
+c0c1f6c	0.3620	0.0642	0.954	0.6	discard	pretrained ResNet at 0.1x LR (worse)
+f4582e7	0.3617	0.0652	0.947	0.8	discard	foveated wrist: wrist at 256 px pooled to 8x8 (val/raw/grip worse, 15% slower)
+
+
+# sep25: all 40 tasks, JPEG frame cache, 10-min budget, per-task holdout (val not comparable to rows above)
+e86d16f	0.332900	0.074700	0.947	0.6	keep	all-40 baseline (champion arch, batch 16, 540 samples/s)
+fcccedc	0.331400	0.075100	0.947	1.2	keep	batch 64 + peak LR 1.2e-3 (val within noise; 958 vs 549 samples/s)
+2bea422	0.330000	0.073400	0.951	1.7	keep	two observation frames (all metrics better at 20% lower throughput)
+ef28256	0.332100	0.073800	0.950	1.7	discard	oversample Long 3x (MINERVA; Long val also worse 0.3355 vs 0.3344)
+4aa9b8c	-	-	-	-	keep	Laplace scale head on detached features (inference-only; bench --ensemble uncertainty)
+23185f2	0.327300	0.073000	0.950	1.7	keep	NOVEL: align encoder tokens to cached DINOv2 features now + one chunk ahead (all 4 suites better)
+8bb4707	0.329500	0.073500	0.949	1.8	discard	supervise 32 steps execute 16 (worse; Long flat)
+3378ba0	0.328300	0.073600	0.948	1.7	keep	channels_last ResNet stem (776 vs 663 samples/s; val within noise)
+dd495e9	0.328300	0.073800	0.948	1.7	discard	teacher align weight 1.0 (ties 0.5)
+88b4a28	0.328500	0.073200	0.951	1.7	discard	NOVEL: spatial 4x4 DINOv2 patch-grid alignment on top of global (ties; raw/grip marginally better; not worth the code)
+3378ba0	-	-	-	1.7	keep	LONG RUN 4h all data (40 epochs, ~11M samples): bench 20/task Spatial 95.5 Object 98.0 Goal 91.0 Long 82.5 avg 91.75
+
+# oct11: same protocol, re-baselined
+3444206	0.327700	0.073100	0.950	1.7	keep	re-baseline of the sep25 champion (noise vs 0.3283)
+2e74c40	0.324900	0.072000	0.953	1.8	keep	FiLM every ResNet stage from language (Goal 0.3492 vs 0.3548; all suites better)
+623bc69	-	-	-	-	info	closed-loop: uncertainty vs decay ensembling on 4 weakest tasks x 20 inits (old all-40 ckpt): 49/80 vs 45/80; paired 7 vs 3 (p~0.34)
+43aa053	0.304800	0.068800	0.952	1.8	keep	history frames t-8,t (val all suites much better; closed-loop 10-min ckpts 40x2: 90.0 vs 88.8, paired 6 vs 5 -> no copycat harm, no clear gain)
+77d9633	-	-	-	-	info	LONG RUN 4.5h FiLM-stages+stride8 (44 ep): bench 20/task decay 92.5/95.5/93.0/84.5 avg 91.38 (prev 91.75); moka 25->55, drawers 55->80 & 75->95; Spatial5 90->65, Object1 100->85
+77d9633	-	-	-	-	discard	uncertainty-weighted ensembling, full 800: 89.38 vs 91.38 decay (paired 24 vs 40; Long 77.0 vs 84.5)
+
+# phase 2 (closed-loop panel: 6 target x10 + 2 guard x10, 40-min train)
+98e2d79	0.312600	0.070200	0.951	1.8	keep	P2 baseline FiLM-stages+stride8: target 48/60 guard 19/20 (moka 2/10)
+57cf5c7	0.331900	0.071900	0.952	1.8	keep	P2 stride 1 (FiLM-stages only): target 56/60 guard 19/20; vs base +8/+0, paired 12/4; moka 2->9 of 10; val worse (0.3319) yet closed loop much better
+85e8f5a	-	-	-	-	discard	LONG RUN 4.5h FiLM-stages stride1 (38 ep): bench 88.5/91.0/92.0/85.5 avg 89.25; Spatial5 90->40; regression is stage FiLM (with long training), not stride
+57cf5c7	-	-	-	-	keep	CHAMPION: 40-min FiLM-stages stride1 (90% data), full bench 97.5/92.0/99.0/88.5 avg 94.25 (Goal beats MINERVA 98.4); long training overfits
+85e8f5a	-	-	-	-	info	sweep: same config 40 min all data 92.5/98.0/98.0/70.5 avg 89.75; 80 min all data 89.5/95.5/92.5/70.0 avg 86.88 -> large run-to-run closed-loop variance; 94.25 likely a good draw
+880df81	-	-	-	-	info	seed replicate: champion config seed 1 (40 min, 90% split) 97.5/95.0/98.5/89.0 avg 95.00 vs seed 0 94.25 -> 90%-split config reproduces; failures differ per seed (tomato sauce 40->95, obj/2 95->70)
+880df81	-	-	-	-	keep	ENSEMBLE seed0+seed1 (chunk averaging, 2x8.0M) 98.0/97.5/99.0/92.0 avg 96.62 (MINERVA 97.45); Goal beats; Long 88.5/89.0 -> 92.0
+18ed988	-	-	-	-	info	ENSEMBLE seed0+1+2 (3x7.96M) 99.0/97.5/98.0/92.5 avg 96.75 vs 2-ens 96.62: saturated; persistent failures libero_10/8 70%, libero_10/6 85%, libero_object/2 85% are systematic not seed noise
+b13db00	-	-	-	-	discard	decay sweep (seed1, long6/long8/obj2 x20): 0.01 48/60 (baseline), -0.1 37, -1.0 24, 0.1 48, 0.3 50 -> recency hurts badly, more smoothing is noise-level; failures are policy errors (tipped bottle, missed pudding grasp, stall above 2nd moka pot), not ensembling artifacts
+6ae2ce6	-	-	-	-	info	failure diagnosis (3-ens replays): moka 2nd pot = open gripper parks at grasp height (z 1.03 vs demo 1.01) pushing down with tiny constant action, never closes; fewest demos of any task (29 vs median 44, ~26 in 90% split) though frames are plentiful (11.8k); pudding = repeated grasps closing on air then stall; salad dressing = grasp topples the tall bottle, no recovery; same init flips ok/fail between runs (knife-edge)
+04b9b68	-	-	-	-	info	KAGGLE r2 baseline (seed1, 24656 steps, T4, code w/ unused progress head): 98.5/100/99/91 avg 97.12 vs laptop same config 95.00 -> run-to-run spread ~2 pts
+04b9b68	-	-	-	-	discard	KAGGLE r2 progress head w0.5 (MINERVA): 97/100/95/89.5 avg 95.38 vs paired baseline 97.12 (Goal 99->95, Long 91->89.5)
+4846e7e	-	-	-	-	discard	KAGGLE r1 LR 4e-4 seed1 24656 steps: 97.5/99.5/96/91 avg 96.00 (baseline draws 95.0-97.1: within spread)
+4846e7e	-	-	-	-	discard	KAGGLE r1 LR 4e-4 seed1 49312 steps: 98.5/99/92.5/89.5 avg 94.88 -> longer training again costs Goal (goal/3 60%)
+04b9b68	-	-	-	-	keep	KAGGLE r3 ENSEMBLE 4 (laptop s0,s1,s2 + kaggle r2 base; 4x7.96M) 98.0/99.5/100/95.0 avg 98.12 > MINERVA 97.45 (Long 95 vs 94, Goal 100) but 31.8M params
+04b9b68	-	-	-	-	info	KAGGLE r3 baseline seed3 24656 steps: 97.5/100/96/89.5 avg 95.75 (single-model draws at 24k: 94.25 95.00 97.12 95.75)
+04b9b68	-	-	-	-	info	KAGGLE r4 length at base LR seed1: 12328 steps 97.5/99/97/91 avg 96.12; 36984 steps 95/98.5/94.5/89 avg 94.25 -> longer hurts, shorter no worse
+4553b8d	-	-	-	-	discard	KAGGLE r5 DISTILL ens4->1 model w0.5 seed1 24656 steps: 96.5/90.5/99.5/91.5 avg 94.50 (object/3 bbq sauce 15%, 10/8 60%)
+4553b8d	-	-	-	-	discard	KAGGLE r5 DISTILL ens4->1 model w1.0 seed1 24656 steps: 97.5/96.5/97.5/93.5 avg 96.25 -> within single-model spread; both students fail object/3 (bbq 15%/65%, every non-distilled model >=95%); teacher targets on object/3 no worse than other tasks
+fb0d933	-	-	-	-	info	KAGGLE r6 ENSEMBLE 4 at 50 inits/task (r3 inits 0-19 + r6 20-49): 97.6/99.6/98.8/92.6 avg 97.15 < MINERVA 97.45 -> the 98.12 at 20 inits was a lucky draw; inits 20-49 alone 96.7; gap is Long (10/6 mug+pudding 74%, 10/8 moka 86%)
+fb0d933	-	-	-	-	discard	KAGGLE r7 MINERVA-like LR 3e-4 x2.5 steps (61640) seed1: 99/99/95/83 avg 94.00; LR 1e-4 x2.5 steps: 97/99.5/92.5/86 avg 93.75 -> lower LR + longer training collapses Long (vs 91 at default); recipe direction dead

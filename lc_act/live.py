@@ -378,9 +378,9 @@ def _handler(console: Console) -> type[BaseHTTPRequestHandler]:
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Watch LC-ACT in a browser")
-    parser.add_argument("--ckpt", type=Path, default=Path("outputs/lc_act_all40/last.pt"))
+    parser.add_argument("--ckpt", type=Path, default=Path("outputs/lc_act_film40/last.pt"))
     parser.add_argument(
-        "--bench", type=Path, default=Path("outputs/lc_act_all40/bench20_decay.json"),
+        "--bench", type=Path, default=Path("outputs/lc_act_film40/bench20_decay.json"),
         help="lc_act.bench summary whose per-task success rates label the buttons",
     )
     parser.add_argument("--host", default="127.0.0.1")

@@ -39,6 +39,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--cache", type=Path, default=None, help="frame cache dir (python -m lc_act.cache)")
     parser.add_argument("--budget-seconds", type=float, default=None)
+    parser.add_argument("--budget-steps", type=int, default=None, help="like --budget-seconds, but machine-independent")
     parser.add_argument("--val-batches", type=int, default=1000)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=0)
@@ -49,6 +50,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 BASE_LR = 1.2e-3
 ALIGN_WEIGHT = 0.5
+# Gap in env steps between history frames.
+OBS_STRIDE = 1
 LONG_WEIGHT = 1.0
 WARMUP_FRAC = 0.02
 
@@ -212,7 +215,7 @@ def train_one_epoch(
     scaler: torch.amp.GradScaler,
     device: torch.device,
     deadline: float | None = None,
-    max_steps: int | None = None,
+    step_limit: int | None = None,
     stop: StopFlag | None = None,
     global_step: int = 0,
     save_every: int = 0,
@@ -248,7 +251,7 @@ def train_one_epoch(
         global_step += 1
         if persist is not None and save_every > 0 and global_step % save_every == 0:
             persist(global_step)
-        if max_steps is not None and steps >= max_steps:
+        if step_limit is not None and global_step >= step_limit:
             break
     elapsed = max(time.monotonic() - started, 1e-9)
     return total_loss / max(samples, 1), samples / elapsed, steps, global_step
@@ -283,6 +286,8 @@ def save_checkpoint(
         optimizer=optimizer.state_dict(),
         scaler=scaler.state_dict(),
         n_obs=model.n_obs,
+        obs_stride=model.obs_stride,
+        n_decoder_layers=model.n_decoder_layers,
     )
     _atomic_torch_save(path, checkpoint.to_payload())
 
@@ -307,6 +312,8 @@ def _model_from_checkpoint(
         ClipTextEncoder(),
         horizon=checkpoint.horizon,
         n_obs=checkpoint.n_obs,
+        obs_stride=checkpoint.obs_stride,
+        n_decoder_layers=checkpoint.n_decoder_layers,
     )
     load_trainable(model, checkpoint.trainable)
     return model.to(device), _stats_on_device(checkpoint.stats, device)
@@ -352,16 +359,20 @@ def _run_training(
     if resume is not None and resume.scaler is not None:
         scaler.load_state_dict(resume.scaler)
     budget = args.budget_seconds
-    if budget is not None and device.type == "cuda":
+    steps_budget = args.budget_steps
+    fixed = budget is not None or steps_budget is not None
+    if fixed and device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
     deadline_box: list[float | None] = [
-        None if budget else training_deadline(args.max_hours, started)
+        None if fixed else training_deadline(args.max_hours, started)
     ]
     total_steps = max(args.epochs * len(loader), 1)
 
     def progress(current_step: int) -> float:
         deadline = deadline_box[0]
+        if steps_budget is not None:
+            return current_step / steps_budget
         if budget is not None:
             return 0.0 if deadline is None else 1 - (deadline - time.monotonic()) / budget
         if deadline is not None:
@@ -372,7 +383,8 @@ def _run_training(
         lr = BASE_LR * cosine_lr_scale(progress(current_step))
         for group in optimizer.param_groups:
             group["lr"] = lr
-    max_steps = 1 if device.type == "cpu" else None
+    # CPU runs are one-step smoke tests unless a step budget says otherwise.
+    step_limit = steps_budget if steps_budget is not None else (start_step + 1 if device.type == "cpu" else None)
     stop = StopFlag()
     signal.signal(signal.SIGINT, stop.request)
     signal.signal(signal.SIGTERM, stop.request)
@@ -395,11 +407,11 @@ def _run_training(
                 scaler,
                 device,
                 deadline=deadline_box[0],
-                max_steps=max_steps,
+                step_limit=step_limit,
                 stop=stop,
                 global_step=step,
-                save_every=0 if budget else args.save_every,
-                persist=None if budget else (lambda current: persist(epoch, current)),
+                save_every=0 if fixed else args.save_every,
+                persist=None if fixed else (lambda current: persist(epoch, current)),
                 deadline_box=deadline_box,
                 budget_seconds=budget,
                 schedule=schedule,
@@ -407,7 +419,7 @@ def _run_training(
         except torch.cuda.OutOfMemoryError:
             print("drop batch to 4 or drop wrist camera")
             sys.exit(1)
-        if budget is None:
+        if not fixed:
             persist(epoch if stop.requested else epoch + 1, step)
         if steps == 0:
             break
@@ -417,7 +429,7 @@ def _run_training(
             f"epoch={epoch} l1={mean_loss:.4f} "
             f"samples/s={samples_per_second:.1f}"
         )
-        if device.type == "cpu" or stop.requested:
+        if stop.requested or (step_limit is not None and step >= step_limit):
             break
         if deadline_box[0] is not None and time.monotonic() >= deadline_box[0]:
             break
@@ -432,7 +444,7 @@ def _run_training(
             f"| gpu {peak_gpu_gb(device):.2f}GB"
         )
         print("suites: " + " | ".join(f"{name} {value:.4f}" for name, value in val.per_suite.items()))
-    if budget is not None:
+    if fixed:
         persist(finished_epoch, step)
 
 
@@ -448,7 +460,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     torch.manual_seed(args.seed)
     train_set, val_set, data_stats, tasks = load_cached(
         args.cache or DEFAULT_ROOT, not args.object_only, args.n_obs,
-        holdout=args.budget_seconds is not None, teacher=ALIGN_WEIGHT > 0,
+        holdout=args.budget_seconds is not None or args.budget_steps is not None, teacher=ALIGN_WEIGHT > 0, obs_stride=OBS_STRIDE,
     )
     # MINERVA: long-horizon demos are the scarce, hard ones; oversample them.
     long_suite = torch.from_numpy(train_set.task_index[train_set.rows] < 10)
@@ -459,13 +471,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         model, stats, checkpoint = load_resume(args.resume, device)
         if checkpoint.n_obs != args.n_obs:
             raise RuntimeError(f"checkpoint has n_obs={checkpoint.n_obs}; pass --n-obs {checkpoint.n_obs}")
+        if checkpoint.obs_stride != OBS_STRIDE:
+            raise RuntimeError(f"checkpoint has obs_stride={checkpoint.obs_stride}; this code uses {OBS_STRIDE}")
         _run_training(
             args, model, loader, stats, checkpoint.tasks, device,
             start_epoch=checkpoint.epoch, start_step=checkpoint.step,
             resume=checkpoint, val_loader=val_loader,
         )
         return
-    model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder(), n_obs=args.n_obs).to(device)
+    model = LcAct(ResNetSpatial(pretrained=True), ClipTextEncoder(), n_obs=args.n_obs, obs_stride=OBS_STRIDE)
+    model = model.to(device)
     _run_training(args, model, loader, data_stats, tasks, device, val_loader=val_loader)
 
 

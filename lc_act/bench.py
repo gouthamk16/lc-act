@@ -38,6 +38,23 @@ class Episode:
     step: int = 0
 
 
+class ModelEnsemble(torch.nn.Module):
+    """Averages the chunks of independently trained models that share inputs and normalization."""
+
+    def __init__(self, models: list[torch.nn.Module]) -> None:
+        super().__init__()
+        first = models[0]
+        if any((m.n_obs, m.obs_stride) != (first.n_obs, first.obs_stride) for m in models):
+            raise ValueError("ensemble members need the same n_obs and obs_stride")
+        self.members = torch.nn.ModuleList(models)
+        self.history_size, self.pick_frames = first.history_size, first.pick_frames
+
+    def forward(self, *inputs, with_scale: bool = False):
+        outs = [member(*inputs, with_scale=True) for member in self.members]
+        actions = torch.stack([a for a, _ in outs]).mean(0)
+        return (actions, torch.stack([s for _, s in outs]).mean(0)) if with_scale else actions
+
+
 def _observe(obs: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     workspace = np.ascontiguousarray(flip_hw(np.asarray(obs["pixels"]["image"])))
     wrist = np.ascontiguousarray(flip_hw(np.asarray(obs["pixels"]["image2"])))
@@ -86,8 +103,8 @@ def _act(
             torch.from_numpy(workspace), torch.from_numpy(wrist),
             stats.apply_state(torch.from_numpy(state).to(device)).cpu(),
         )
-        episode.history.extend([current] * (model.n_obs if not episode.history else 1))
-    frames = [list(zip(*episodes[i].history)) for i in ids]
+        episode.history.extend([current] * (model.history_size() if not episode.history else 1))
+    frames = [list(zip(*model.pick_frames(episodes[i].history))) for i in ids]
     workspace, wrist, state = (
         torch.stack([torch.stack(f[k]) for f in frames]).to(device) for k in range(3)
     )
@@ -140,7 +157,7 @@ def run_benchmark(
         job = queues[i].popleft()
         pipes[i].send(("reset", job))
         obs, instruction, max_steps = pipes[i].recv()
-        episodes[i] = Episode(job, instruction, max_steps, deque(maxlen=model.n_obs))
+        episodes[i] = Episode(job, instruction, max_steps, deque(maxlen=model.history_size()))
         observations[i] = obs
 
     try:
@@ -187,13 +204,23 @@ def summarize(results: dict[Job, tuple[bool, int]]) -> dict:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark LC-ACT on LIBERO suites")
-    parser.add_argument("--ckpt", type=Path, required=True)
+    parser.add_argument("--ckpt", type=Path, nargs="+", required=True, help="several: average their chunks")
     parser.add_argument("--suites", nargs="+", default=list(SUITE_NAMES), choices=SUITE_NAMES)
+    parser.add_argument("--tasks", nargs="+", default=None, help="only these, as suite/task_id (e.g. libero_10/8)")
     parser.add_argument("--episodes", type=int, default=50, help="init states per task")
+    parser.add_argument("--first-init", type=int, default=0, help="start of the init range, to split a bench across runs")
     parser.add_argument("--envs", type=int, default=2, help="each LIBERO env holds ~2.9 GB (MuJoCo arena)")
     parser.add_argument("--ensemble", choices=("decay", "uncertainty"), default="decay")
     parser.add_argument("--out", type=Path, default=None)
     return parser.parse_args(argv)
+
+
+def pick_jobs(args: argparse.Namespace) -> list[Job]:
+    picked = [(suite, task) for suite in args.suites for task in range(10)]
+    if args.tasks:
+        picked = [(suite, int(task)) for suite, task in (name.split("/") for name in args.tasks)]
+    inits = range(args.first_init, args.first_init + args.episodes)
+    return [Job(suite, task, init) for suite, task in picked for init in inits]
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -201,8 +228,17 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     args = parse_args(argv)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, stats = load_checkpoint(args.ckpt, device)
-    jobs = [Job(suite, task, init) for suite in args.suites for task in range(10) for init in range(args.episodes)]
+    loaded = [load_checkpoint(path, device) for path in args.ckpt]
+    model, stats = loaded[0]
+    if len(loaded) > 1:
+        # Members act in one normalized space, so they must share statistics (same training split).
+        if any(not torch.allclose(s.action_mean, stats.action_mean) for _, s in loaded):
+            raise ValueError("ensemble members were normalized differently; train them on the same split")
+        # The CLIP text encoder is frozen and identical in every member; keep one copy on the GPU.
+        for member, _ in loaded[1:]:
+            member.text = model.text
+        model = ModelEnsemble([m for m, _ in loaded])
+    jobs = pick_jobs(args)
     started = time.monotonic()
     results = run_benchmark(model, stats, jobs, args.envs, device, args.ensemble == "uncertainty")
     summary = summarize(results)
