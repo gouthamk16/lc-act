@@ -47,7 +47,7 @@ DINOv2 features of the current frame and of the frame one chunk ahead; those
 heads are dropped at inference. Evaluation (`lc_act.bench`) runs every task of
 all four suites, the protocol MINERVA and π₀.₅ report.
 
-The model is 7.7M parameters at inference.
+The model is 8.0M parameters at inference.
 
 More about the model architecture in [MODEL.md](MODEL.md).
 
@@ -99,6 +99,10 @@ python -u -m lc_act.train --out outputs/lc_act_all40 --max-hours 4 --epochs 999 
 
 `--object-only` restricts training to the ten Object tasks.
 
+`--budget-steps N` fixes the run length in optimizer steps and trains on the
+90% autoresearch split; 24,656 steps is the 40-minute laptop budget of the
+best configuration.
+
 Resume after a stop or crash (pass the same `--n-obs` the checkpoint was
 trained with):
 
@@ -118,8 +122,11 @@ MINERVA reports with N = 50). Each LIBERO env holds ~2.9 GB of RAM, so keep
 python -m lc_act.bench --ckpt outputs/lc_act_all40/last.pt --episodes 20 --out outputs/lc_act_all40/bench.json
 ```
 
-`--ensemble uncertainty` weights each chunk's vote by its predicted Laplace
-scale instead of age alone.
+Several `--ckpt` paths average the members' action chunks (they must share
+normalization, i.e. the same training split). `--first-init K` starts at init
+state K, so a 50/task bench can be split across machines. `--ensemble
+uncertainty` weights each chunk's vote by its predicted Laplace scale instead
+of age alone.
 
 The older single-task eval runs ten fixed-seed soup episodes and saves episode zero:
 
@@ -161,64 +168,94 @@ integration.
 
 ## Results
 
-Current weights: `outputs/lc_act_film40/last.pt` — language FiLM in every
-ResNet stage, two adjacent frames, DINOv2 alignment, **40 minutes** of
-training (on the 90% autoresearch split). Benchmarked with `lc_act.bench`:
-every task of the four suites, init states 0–19 (800 rollouts), LeRobot step
-caps, replan every step with temporal ensembling. The ensemble column averages
-the action chunks of that model and a second seed of the same configuration
-(`outputs/ar_ckpt/p2s1_seed1/last.pt`):
+All numbers come from `lc_act.bench`: every task of the four suites, LeRobot
+step caps, replan every step with temporal ensembling. "20/task" is init
+states 0–19 (800 rollouts); "50/task" is init states 0–49 (2,000 rollouts), the
+protocol MINERVA reports.
+
+| Suite | Best single model, 20/task | 4-model ensemble, 20/task | **4-model ensemble, 50/task** | MINERVA-9.66M, 50/task | π₀.₅ via LeRobot |
+| --- | --- | --- | --- | --- | --- |
+| Spatial | 98.5% | 98.0% | **97.6%** | 98.4% | 97.0% |
+| Object | 100.0% | 99.5% | **99.6%** | 99.0% | 99.0% |
+| Goal | 99.0% | 100.0% | **98.8%** | 98.4% | 98.0% |
+| Long | 91.0% | 95.0% | **92.6%** | 94.0% | 96.0% |
+| **Average** | 97.12% | 98.12% | **97.15%** | 97.45% | 97.5% |
+| Params at inference | 8.0M | 31.8M | 31.8M | 9.66M | ~3B |
+
+**Best result: 97.15% at MINERVA's protocol, 0.30 points behind it.** The
+ensemble averages the action chunks of four models of the same configuration
+(language FiLM in every ResNet stage, two adjacent frames, DINOv2 alignment,
+40 minutes on the laptop or the same 24,656 optimizer steps on Kaggle, on the
+90% autoresearch split), trained with different seeds. It beats MINERVA on
+Object and Goal and loses on Spatial and Long, at 3.3× the parameters. The four checkpoints are not in the repository:
 
 ```bash
-python -m lc_act.bench --ckpt outputs/lc_act_film40/last.pt outputs/ar_ckpt/p2s1_seed1/last.pt --episodes 20
+python -m lc_act.bench --episodes 50 --ckpt \
+  outputs/lc_act_film40/last.pt outputs/ar_ckpt/p2s1_seed1/last.pt \
+  outputs/ar_ckpt/p2s1_seed2/last.pt outputs/kaggle/r2/base_s24k/last.pt
 ```
 
-| Suite | LC-ACT 8.0M seed 0 | seed 1 | 2-seed ensemble (16.0M) | MINERVA-9.66M (50 per task) | π₀.₅ via LeRobot |
-| --- | --- | --- | --- | --- | --- |
-| Spatial | 97.5% | 97.5% | 98.0% | 98.4% | 97.0% |
-| Object | 92.0% | 95.0% | 97.5% | 99.0% | 99.0% |
-| Goal | 99.0% | 98.5% | **99.0%** | 98.4% | 98.0% |
-| Long | 88.5% | 89.0% | 92.0% | 94.0% | 96.0% |
-| **Average** | 94.25% | 95.00% | **96.62%** | 97.45% | 97.5% |
+The best single model (`outputs/kaggle/r2/base_s24k/last.pt`, seed 1, trained
+on a Kaggle T4) scored 97.12% on 20/task; it has not been run on 50/task.
+Four benchmarked single-model runs of the same configuration scored 94.25,
+95.00, 95.75 and 97.12% (mean 95.5), so seed noise is about ±1.5 points,
+larger than any single change tried since. The ensemble's 98.12% on 20/task
+fell to 97.15% on 50/task (init states 20–49 alone: 96.7%), so a claim against
+MINERVA needs all 50.
 
-The configuration reproduces: two seeds score 94.25% and 95.00%. They fail on
-different tasks (tomato sauce 40% vs 95%, `libero_object/2` 95% vs 70%), which
-is why averaging their chunks gains 1.6 points over the better seed. The
-ensemble is 0.83 points behind MINERVA, but it runs 16.0M parameters at
-inference against MINERVA's 9.66M, and it is measured on 20 init states per task
-rather than MINERVA's 50. The weaker all-data runs (40 minutes: 89.75%, Long 70.5%;
-80 minutes: 86.88%) are not explained by seed variance and remain open.
+The gap is two Long tasks that every model fails the same way: mug on plate
+plus pudding (`libero_10/6`, 74% over 50) and both moka pots on the stove
+(`libero_10/8`, 86%). On the moka pots, the arm parks the open gripper at grasp
+height over the second pot and sends a near-constant tiny action; that task
+has the fewest demos (29). Temporal-ensemble decay does not change it
+(0.01 ≈ 0.1 ≈ 0.3).
 
-Adding a third seed (`outputs/ar_ckpt/p2s1_seed2/last.pt`, 23.9M at inference)
-scored 99.0 / 97.5 / 98.0 / 92.5, **96.75%**: ensembling has saturated. The
-remaining failures are shared by every seed — both moka pots on the stove
-(70%), mug on plate plus pudding (85%), salad dressing in basket (85%) — so they
-are systematic, not seed noise.
+What did not beat the baseline (20/task, Kaggle T4, seed 1 unless noted;
+baseline draws 94.25–97.12%):
 
-Longer training made things worse. The same configuration trained for 4.5
-hours scored 89.25% (Spatial 88.5, Object 91.0): per-stage language FiLM
-overfits with long training even though it fixes the Goal and Long failures
-early. The earlier 4-hour model without it (`outputs/lc_act_all40`, Sept 26)
-scored 91.75%.
+| Change | Average |
+| --- | --- |
+| Half the steps (12,328) | 96.12% |
+| 1.5× steps (36,984) | 94.25% |
+| Peak LR 4e-4, 24,656 / 49,312 steps | 96.00% / 94.88% |
+| MINERVA-like LR 3e-4 / 1e-4, 2.5× steps (61,640) | 94.00% / 93.75% |
+| Training-only progress head (MINERVA) | 95.38% |
+| Distill the 4-model ensemble into one model, distill weight 0.5 / 1.0 | 94.50% / 96.25% |
+| Third laptop seed added to a 2-model ensemble | +0.13 points |
+| Uncertainty-weighted temporal ensembling | −2.0 points |
+| History frames 8 steps apart | closed-loop panel 48 vs 56 of 60 |
 
-**Follow-up run (2026-10-12).** Language FiLM in every ResNet stage plus
-history frames 8 steps apart, 4.5 hours (`outputs/lc_act_oct11/last.pt`):
-Spatial 92.5, Object 95.5, Goal 93.0, Long 84.5, average **91.38%** — a tie
-overall, but it fixed the targeted failures (both moka pots 25 → 55%, top
-drawer 55 → 80%, middle drawer 75 → 95%) while breaking four tasks that used
-to work (Spatial 5 90 → 65%, Object 1 100 → 85%). Uncertainty-weighted
-ensembling on that model scored 89.38%, worse than plain decay ensembling
-(paired 24 wins to 40 losses, nearly all on Long), so the default stays decay.
-The next phase keeps changes on closed-loop panel success instead of val L1;
-see `program.md`.
+Every longer run lost, whatever the learning rate: the per-stage language FiLM
+overfits with long training. The distilled students both failed one task the
+others solve (BBQ sauce in basket, 15% / 65%) even though the teacher targets
+there are as accurate as elsewhere. The next lever is the action head: L1
+regression averages modes at the grasp decision, which matches both Long
+failures; MINERVA uses flow matching.
 
-The autoresearch log is `artifacts/results.tsv`; per-task rates are in
-`outputs/ens_film40_s0s1/bench20_decay.json`.
+The autoresearch log (every run, kept or discarded) is
+`artifacts/autoresearch_log.tsv`.
 
-The earlier Object-only model (`outputs/lc_act/last.pt`, commit `be73e88`)
-scored 95% on the ten Object tasks, measured without a step cap.
+## Kaggle
 
-History:
+Most of the November runs trained and benchmarked on Kaggle (2× T4, 12 h
+sessions, ~30 GPU-hours a week). `kaggle/launch.py` writes a kernel from
+`kaggle/run_template.py` and pushes it: each experiment trains on one T4
+(`--budget-steps`, so a run is the same length on any GPU) and is then
+benchmarked on it. `--first-init` splits a 50/task bench across both GPUs.
+
+```bash
+git archive HEAD lc_act | tar -x -C <staging>   # then: kaggle datasets version -p <staging> -r tar
+python kaggle/launch.py r8 '{"experiments": [{"tag": "base", "args": ["--budget-steps", "24656", "--seed", "4"]}]}'
+```
+
+It needs three private datasets (`lc-act-code`, the 4 GB `lc-act-libero128`
+frame cache, and `lc-act-ckpts` for ensemble members). Two Kaggle traps are
+handled in the template: `egl_probe` does not build on Python 3.13, so
+`hf-libero` and `robomimic` install with `--no-deps`; and Kaggle registers only
+Mesa's EGL vendor, so MuJoCo would render on the CPU at 11 frames/s until
+`__EGL_VENDOR_LIBRARY_FILENAMES` points at NVIDIA's library (300 frames/s).
+
+## History
 
 - 2026-09-14: the first model (28.5M trainable, 3 epochs) scored 0/10 soup.
 - 2026-09-23: that 0/10, and later 0/10 results, came from an eval bug. The
@@ -228,14 +265,23 @@ History:
 - 2026-09-24: an autoresearch pass shrank the model to 7.6M trainable
   parameters (128 px, 256-wide transformer) while raising all-task success from
   62% to 86% open-loop, and 95% with temporal ensembling.
-- 2026-10-12: language FiLM in every ResNet stage, chosen by a closed-loop
-  panel instead of val L1, and trained 40 minutes instead of hours: 94.25%.
-  History frames 8 steps apart had won val L1 by the widest margin of the
-  loop and cost closed-loop success (panel 48 vs 56 of 60).
-- 2026-10-14: a second seed of the same configuration scored 95.00%, and
-  averaging the two models' chunks scored 96.62% (Long 92.0%).
-  A third seed added only 0.13 points (96.75%).
 - 2026-09-27: all 40 tasks from a JPEG frame cache (830 vs 220 samples/s),
   two-frame history, batch 64, and training-only alignment to frozen DINOv2
   features of the current frame and the frame one chunk ahead. 91.75% over the
   four suites (800 rollouts).
+- 2026-10-12: language FiLM in every ResNet stage, chosen by a closed-loop
+  panel instead of val L1, and trained 40 minutes instead of hours: 94.25%.
+  History frames 8 steps apart had won val L1 by the widest margin of the
+  loop and cost closed-loop success (panel 48 vs 56 of 60). The same model
+  trained 4.5 hours scored 89.25%.
+- 2026-10-14: a second seed scored 95.00%, and averaging the two models'
+  chunks scored 96.62% (Long 92.0%). A third seed added only 0.13 points.
+- 2026-11-02: runs moved to Kaggle. A fourth seed scored 97.12%, and the
+  4-model ensemble 98.12% on 20/task. Learning rate, run length, a progress
+  head and ensemble distillation all stayed inside seed noise or lost.
+- 2026-11-03: the 4-model ensemble at MINERVA's 50/task protocol: 97.15%
+  (MINERVA 97.45%). Lower learning rate with 2.5× longer training lost
+  (94.00%, 93.75%).
+
+The earlier Object-only model (`outputs/lc_act/last.pt`, commit `be73e88`)
+scored 95% on the ten Object tasks, measured without a step cap.

@@ -22,7 +22,7 @@ Collapsing each camera to one CLIP vector throws away grasp geometry. ACT and LI
 
 Scratch Diffusion Policy already hits **92.5% Object**. MINERVA reaches 99.6% Object with a 0.54M-parameter policy at 128 px, where L1 regression matched flow matching and replan-every-step temporal ensembling beat long open-loop chunks. We need spatial chunks + L1, not a giant VLM.
 
-Rejected on this 8 GB laptop: OpenVLA-OFT 7B (25–62 GB), SmolVLA (10–16 GB), MiniVLA/TinyVLA VLMs, CLIP-CLS TinyVLA, CVAE, flow matching.
+Rejected on this 8 GB laptop: OpenVLA-OFT 7B (25–62 GB), SmolVLA (10–16 GB), MiniVLA/TinyVLA VLMs, CLIP-CLS TinyVLA, CVAE. Flow matching was rejected early for cost; it is now the main open lever, because L1 regression averages modes at the grasp decision, which fits both remaining Long failures.
 
 ## Architecture
 
@@ -72,7 +72,9 @@ Without the 2-D sine and camera tags, the encoder is permutation-invariant and c
 | Inference total | 7,962,318 | |
 | Train memory | 1.7 GB peak at batch 64 (RTX 4060 Laptop 8 GB) | |
 
-Current weights: `outputs/lc_act_film40/last.pt` (2026-10-12, stage FiLM, stride 1, 40 minutes on the 90% autoresearch split). `lc_act.bench`, 20 init states per task (800 rollouts): Spatial 97.5, Object 92.0, Goal 99.0, Long 88.5, **average 94.25%**. A second seed (`outputs/ar_ckpt/p2s1_seed1/last.pt`) scored 97.5 / 95.0 / 98.5 / 89.0, **95.00%**, so the configuration reproduces; the weaker all-data runs (89.75% at 40 minutes, 86.88% at 80) are unexplained. The seeds fail on different tasks (tomato sauce 40 vs 95%), and averaging their chunks (`--ckpt` with both) scores 98.0 / 97.5 / 99.0 / 92.0, **96.62%**, against MINERVA-9.66M's 97.45, at 16.0M inference parameters. A third seed (23.9M) scored 99.0 / 97.5 / 98.0 / 92.5, 96.75%: ensembling has saturated, and the remaining failures (both moka pots 70%, mug plus pudding 85%, salad dressing 85%) are shared by every seed.
+Current best: a chunk-averaging ensemble of four models of this configuration, each trained 40 minutes on the laptop or the same 24,656 optimizer steps on a Kaggle T4 (`--budget-steps`), on the 90% autoresearch split, with different seeds: `outputs/lc_act_film40/last.pt`, `outputs/ar_ckpt/p2s1_seed1/last.pt`, `outputs/ar_ckpt/p2s1_seed2/last.pt` and `outputs/kaggle/r2/base_s24k/last.pt`. At MINERVA's protocol (`lc_act.bench`, init states 0–49 per task, 2,000 rollouts): Spatial 97.6, Object 99.6, Goal 98.8, Long 92.6, **average 97.15%**, against MINERVA-9.66M's 97.45, at 31.8M inference parameters (the frozen CLIP text encoder is shared by the members). On init states 0–19 the same ensemble scored 98.12%, so 20 states per task overstated it by a point. Single models of the configuration score 94.25–97.12% on 0–19 (best: `outputs/kaggle/r2/base_s24k/last.pt`, 98.5 / 100 / 99.0 / 91.0). The remaining failures are shared by every member: mug on plate plus pudding (`libero_10/6`, 74%) and both moka pots (`libero_10/8`, 86%).
+
+Tried and lost against that baseline (single model, 0–19): half or 1.5× the steps, peak LR 4e-4, MINERVA-like LR 3e-4 or 1e-4 with 2.5× the steps (94.00%, 93.75%), a training-only progress head (95.38%), and distilling the ensemble into one model (94.50%, 96.25%). Longer training loses at every learning rate.
 
 Earlier: `outputs/lc_act_all40/last.pt` (2026-09-27, no stage FiLM, 4 h): 95.5 / 98.0 / 91.0 / 82.5, average 91.75%. `outputs/lc_act_oct12/last.pt` (this config trained 4.5 h): 88.5 / 91.0 / 92.0 / 85.5, average 89.25% — long training overfits the per-stage language conditioning.
 

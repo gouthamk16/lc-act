@@ -8,3 +8,5 @@ __pycache__/
 convo.md
 run.log
 artifacts/results.tsv
+results.tsv
+kaggle/rounds/
