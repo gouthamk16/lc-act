@@ -26,7 +26,7 @@ STAGE_CHANNELS = (64, 128, 256)  # ResNet-18 layer1..layer3
 
 class SpatialVision(Protocol):
     def encode(
-        self, images: torch.Tensor, group: int = 1, film: list[torch.Tensor] | None = None,
+        self, images: torch.Tensor, film: list[torch.Tensor], group: int = 1,
     ) -> torch.Tensor: ...
 
 
@@ -171,7 +171,7 @@ class LcAct(nn.Module):
         batch, frames = images.shape[:2]
         film = self.stage_film(lang[:, 0]).repeat_interleave(frames, 0)
         film = list(film.split([2 * c for c in STAGE_CHANNELS], dim=-1))
-        feats = self.vision.encode(images.flatten(0, 1), group=frames, film=film)
+        feats = self.vision.encode(images.flatten(0, 1), film, group=frames)
         feats = feats.reshape(batch, frames, *feats.shape[1:]).transpose(1, 2).flatten(2)
         tokens = self.vision_proj(feats)
         height, width = grid_hw(tokens.shape[1])
@@ -222,7 +222,7 @@ class ResNetSpatial(nn.Module):
         self.register_buffer("std", std)
 
     def encode(
-        self, images: torch.Tensor, group: int = 1, film: list[torch.Tensor] | None = None,
+        self, images: torch.Tensor, film: list[torch.Tensor], group: int = 1,
     ) -> torch.Tensor:
         x = _as_nchw_float(images).to(device=self.mean.device, dtype=self.mean.dtype)
         if x.shape[-1] != VISION_SIZE:
@@ -233,9 +233,8 @@ class ResNetSpatial(nn.Module):
         feat = self.stem[:4](x)
         for index, stage in enumerate(self.stem[4:]):
             feat = stage(feat)
-            if film is not None:
-                gamma, beta = film[index][:, :, None, None].to(feat.dtype).chunk(2, dim=1)
-                feat = feat * (1 + gamma) + beta
+            gamma, beta = film[index][:, :, None, None].to(feat.dtype).chunk(2, dim=1)
+            feat = feat * (1 + gamma) + beta
         return feat.flatten(2).transpose(1, 2)
 
 

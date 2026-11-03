@@ -47,7 +47,6 @@ class ModelEnsemble(torch.nn.Module):
         if any((m.n_obs, m.obs_stride) != (first.n_obs, first.obs_stride) for m in models):
             raise ValueError("ensemble members need the same n_obs and obs_stride")
         self.members = torch.nn.ModuleList(models)
-        self.n_obs = first.n_obs
         self.history_size, self.pick_frames = first.history_size, first.pick_frames
 
     def forward(self, *inputs, with_scale: bool = False):
@@ -235,6 +234,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         # Members act in one normalized space, so they must share statistics (same training split).
         if any(not torch.allclose(s.action_mean, stats.action_mean) for _, s in loaded):
             raise ValueError("ensemble members were normalized differently; train them on the same split")
+        # The CLIP text encoder is frozen and identical in every member; keep one copy on the GPU.
+        for member, _ in loaded[1:]:
+            member.text = model.text
         model = ModelEnsemble([m for m, _ in loaded])
     jobs = pick_jobs(args)
     started = time.monotonic()

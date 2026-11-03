@@ -215,7 +215,7 @@ def train_one_epoch(
     scaler: torch.amp.GradScaler,
     device: torch.device,
     deadline: float | None = None,
-    max_steps: int | None = None,
+    step_limit: int | None = None,
     stop: StopFlag | None = None,
     global_step: int = 0,
     save_every: int = 0,
@@ -251,7 +251,7 @@ def train_one_epoch(
         global_step += 1
         if persist is not None and save_every > 0 and global_step % save_every == 0:
             persist(global_step)
-        if max_steps is not None and steps >= max_steps:
+        if step_limit is not None and global_step >= step_limit:
             break
     elapsed = max(time.monotonic() - started, 1e-9)
     return total_loss / max(samples, 1), samples / elapsed, steps, global_step
@@ -383,7 +383,8 @@ def _run_training(
         lr = BASE_LR * cosine_lr_scale(progress(current_step))
         for group in optimizer.param_groups:
             group["lr"] = lr
-    max_steps = 1 if device.type == "cpu" else None
+    # CPU runs are one-step smoke tests unless a step budget says otherwise.
+    step_limit = steps_budget if steps_budget is not None else (start_step + 1 if device.type == "cpu" else None)
     stop = StopFlag()
     signal.signal(signal.SIGINT, stop.request)
     signal.signal(signal.SIGTERM, stop.request)
@@ -406,7 +407,7 @@ def _run_training(
                 scaler,
                 device,
                 deadline=deadline_box[0],
-                max_steps=max_steps if steps_budget is None else steps_budget - step,
+                step_limit=step_limit,
                 stop=stop,
                 global_step=step,
                 save_every=0 if fixed else args.save_every,
@@ -428,9 +429,7 @@ def _run_training(
             f"epoch={epoch} l1={mean_loss:.4f} "
             f"samples/s={samples_per_second:.1f}"
         )
-        if (device.type == "cpu" and steps_budget is None) or stop.requested:
-            break
-        if steps_budget is not None and step >= steps_budget:
+        if stop.requested or (step_limit is not None and step >= step_limit):
             break
         if deadline_box[0] is not None and time.monotonic() >= deadline_box[0]:
             break

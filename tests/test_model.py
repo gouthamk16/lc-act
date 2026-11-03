@@ -8,7 +8,7 @@ TASK = "pick up the alphabet soup and place it in the basket"
 
 
 class FakeVision(nn.Module):
-    def encode(self, images: torch.Tensor, size: int = 0, group: int = 1, film=None) -> torch.Tensor:
+    def encode(self, images: torch.Tensor, film: list[torch.Tensor], group: int = 1) -> torch.Tensor:
         return torch.zeros(images.shape[0], 4, RESNET_DIM, device=images.device)
 
 
