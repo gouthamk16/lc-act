@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from lc_act.bench import ModelEnsemble
 from lc_act.cache import DEFAULT_ROOT, CachedLibero
 from lc_act.data import collate
-from lc_act.train import load_checkpoint
+from lc_act.train import _stats_on_device, load_checkpoint
 from lc_act.types import ACTION_DIM
 
 
@@ -26,7 +26,9 @@ def build(ckpts: list[Path], root: Path, out: Path, batch: int, workers: int) ->
     first = loaded[0][0]
     rows = np.arange(np.load(root / "task_index.npy").shape[0])
     tasks = json.loads((root / "tasks.json").read_text())
-    data = CachedLibero(root, rows, stats, tasks, first.n_obs, horizon=first.horizon, obs_stride=first.obs_stride)
+    # Loader workers normalize on the CPU; the model's copy of the stats lives on the GPU.
+    cpu_stats = _stats_on_device(stats, torch.device("cpu"))
+    data = CachedLibero(root, rows, cpu_stats, tasks, first.n_obs, horizon=first.horizon, obs_stride=first.obs_stride)
     loader = DataLoader(data, batch_size=batch, num_workers=workers, collate_fn=collate)
     result = np.lib.format.open_memmap(out, "w+", np.float16, (len(rows), first.horizon, ACTION_DIM))
     start = 0
