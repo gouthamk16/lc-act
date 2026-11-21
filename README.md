@@ -49,7 +49,7 @@ all four suites, the protocol MINERVA and π₀.₅ report.
 
 The model is 8.0M parameters at inference.
 
-More about the model architecture in [MODEL.md](MODEL.md).
+The architecture, the design of each component, the requirements and the decision log are in [docs/design.md](docs/design.md).
 
 ## Install
 

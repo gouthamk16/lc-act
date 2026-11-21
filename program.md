@@ -20,7 +20,7 @@ To set up a new experiment, work with the user to:
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current main.
 3. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `README.md` — lab context and [Starscream](https://github.com/gouthamk16/starscream) mapping.
-   - `MODEL.md` — canonical architecture card.
+   - `docs/design.md` — canonical architecture and design (components, requirements, decision log).
    - `lc_act/sim/eval.py` / `lc_act/sim/bench.py` / `lc_act/sim/policy.py` — closed-loop protocol (replan every step, temporal ensembling; bench runs every task of each suite at init states 0..N-1 with LeRobot's per-suite step caps). **Do not modify** the protocol.
    - `lc_act/training/cache.py` / `lc_act/training/data_loader.py` — frame cache, per-task holdout split and sample layout. **Do not modify** the split or sample layout (frozen like Karpathy `prepare.py`); build once with `python -m lc_act.training.cache`.
    - `lc_act/training/train.py` / `lc_act/training/config.py` / `lc_act/models/*` — the files you modify. Hyperparameters are `TrainConfig` fields, so most knobs are also flags (`--lr`, `--align-weight`, ...).
@@ -133,7 +133,7 @@ The idea is that you are a completely autonomous researcher trying things out. I
 
 **Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
 
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers cited in MODEL.md, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers cited in `docs/design.md` (section 1), re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
 
 ## Phase 2 (oct12): closed-loop keep metric
 
