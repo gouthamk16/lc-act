@@ -20,10 +20,10 @@ To set up a new experiment, work with the user to:
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current main.
 3. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `README.md` — lab context and [Starscream](https://github.com/gouthamk16/starscream) mapping.
-   - `MODEL.md` — canonical architecture card.
-   - `lc_act/eval.py` / `lc_act/bench.py` — closed-loop protocol (replan every step, temporal ensembling; bench runs every task of each suite at init states 0..N-1 with LeRobot's per-suite step caps). **Do not modify** the protocol.
-   - `lc_act/cache.py` — frame cache and per-task holdout split. **Do not modify** the split or sample layout (frozen like Karpathy `prepare.py`); build once with `python -m lc_act.cache`.
-   - `lc_act/train.py` / `lc_act/model.py` / `lc_act/posenc.py` / `lc_act/types.py` — the files you modify.
+   - `docs/design.md` — canonical architecture and design (components, requirements, decision log).
+   - `lc_act/sim/eval.py` / `lc_act/sim/bench.py` / `lc_act/sim/policy.py` — closed-loop protocol (replan every step, temporal ensembling; bench runs every task of each suite at init states 0..N-1 with LeRobot's per-suite step caps). **Do not modify** the protocol.
+   - `lc_act/training/cache.py` / `lc_act/training/data_loader.py` — frame cache, per-task holdout split and sample layout. **Do not modify** the split or sample layout (frozen like Karpathy `prepare.py`); build once with `python -m lc_act.training.cache`.
+   - `lc_act/training/train.py` / `lc_act/training/config.py` / `lc_act/models/*` — the files you modify. Hyperparameters are `TrainConfig` fields, so most knobs are also flags (`--lr`, `--align-weight`, ...).
 4. **Verify data exists**: HuggingFace `lerobot/libero` should already be cached from prior trains. If load fails, tell the human.
 5. **Initialize results.tsv**: Create `artifacts/results.tsv` with just the header row. The baseline will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
@@ -35,7 +35,7 @@ Once you get confirmation, kick off the experimentation.
 Each experiment runs on a single GPU. The training script runs for a **fixed time budget of 10 minutes** (wall clock training time, excluding startup / CLIP download / dataset open). All 40 tasks are 4x the Object data, so 5 minutes no longer covers an epoch. Launch from the repo root:
 
 ```
-python -m lc_act.train --budget-seconds 600 --epochs 99 --max-hours 0 --save-every 0 --out /tmp/lc_act_ar
+python -m lc_act.training.train --budget-seconds 600 --epochs 99 --max-hours 0 --save-every 0 --out /tmp/lc_act_ar
 ```
 
 `--budget-seconds 600` arms the 10-minute clock after the first train batch. `--out /tmp/lc_act_ar` keeps AR junk off the overnight checkpoint.
@@ -43,12 +43,12 @@ python -m lc_act.train --budget-seconds 600 --epochs 99 --max-hours 0 --save-eve
 **Priority (this lab):** Prefer **novel architectural changes** over configuration knobs. Architecture first: attention / residual paths, token layout, cameras, horizon/chunking, aux heads, conditioning (FiLM, extra language tokens), posenc, encoder/decoder depth. LR / batch / weight decay / warmup only after architectural ideas stall. A 0.002 val L1 win from `lr *= 2` is weaker evidence than a smaller win from a cleaner architecture.
 
 **What you CAN do:**
-- Modify `lc_act/train.py`, `lc_act/model.py`, `lc_act/posenc.py`, `lc_act/types.py`. Architecture, optimizer, hyperparameters, training loop, batch size, model size.
+- Modify `lc_act/training/train.py`, `lc_act/training/config.py`, `lc_act/models/*`. Architecture, optimizer, hyperparameters, training loop, batch size, model size.
 
 **What you CANNOT do:**
 - Install new packages or add dependencies. You can only use what's already in `requirements.txt` / `pyproject.toml`.
-- Modify the eval protocol in `lc_act/eval.py` / `lc_act/bench.py`.
-- Modify the holdout split or sample layout in `lc_act/cache.py`.
+- Modify the eval protocol in `lc_act/sim/eval.py` / `lc_act/sim/bench.py` / `lc_act/sim/policy.py`.
+- Modify the holdout split or sample layout in `lc_act/training/data_loader.py` / `lc_act/training/cache.py`.
 - Overwrite `outputs/lc_act/last.pt` from the overnight 20-epoch run.
 
 **The goal is simple: get the lowest val L1.** Since the time budget is fixed, you don't need to worry about training time — it's always 5 minutes. The only constraint is that the code runs without crashing and finishes within the time budget.
@@ -114,9 +114,9 @@ The experiment runs on a dedicated branch (e.g. `autoresearch/sep15`).
 LOOP FOREVER:
 
 1. Look at the git state: the current branch/commit we're on
-2. Tune `lc_act/train.py` / `lc_act/model.py` / `lc_act/posenc.py` with an experimental idea by directly hacking the code. Prefer architecture.
+2. Tune `lc_act/training/train.py` / `lc_act/training/config.py` / `lc_act/models/*` with an experimental idea by directly hacking the code. Prefer architecture.
 3. git commit (author gouthamk16, no Cursor co-author trailer)
-4. Run: `python -m lc_act.train --budget-seconds 600 --epochs 99 --max-hours 0 --save-every 0 --out /tmp/lc_act_ar > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
+4. Run: `python -m lc_act.training.train --budget-seconds 600 --epochs 99 --max-hours 0 --save-every 0 --out /tmp/lc_act_ar > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
 5. Read out the results: `grep " | val " run.log | tail -1`
 6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
 7. Record the results in the tsv (NOTE: do not commit the artifacts/results.tsv file, leave it untracked by git)
@@ -129,11 +129,11 @@ The idea is that you are a completely autonomous researcher trying things out. I
 
 **Timeout**: Each experiment should take ~10 minutes of train time (+ startup). If a run exceeds 20 minutes, kill it and treat it as a failure (discard and revert).
 
-**Closed-loop check**: val L1 cannot see inference-time changes (ensembling, uncertainty) or compounding error. For those, and for any keep that changes the model's inputs, run `python -m lc_act.bench --ckpt /tmp/lc_act_ar/last.pt --episodes 5` (200 rollouts) against the champion's number.
+**Closed-loop check**: val L1 cannot see inference-time changes (ensembling, uncertainty) or compounding error. For those, and for any keep that changes the model's inputs, run `python -m lc_act.sim.bench --ckpt /tmp/lc_act_ar/last.pt --episodes 5` (200 rollouts) against the champion's number.
 
 **Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
 
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers cited in MODEL.md, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers cited in `docs/design.md` (section 1), re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
 
 ## Phase 2 (oct12): closed-loop keep metric
 
@@ -151,7 +151,7 @@ rollouts instead.
 - guard (tasks the stride/FiLM run broke): `libero_spatial/5`, `libero_object/1`
 
 **Run.** 40 minutes of training (`--budget-seconds 2400`, holdout split, so
-val L1 is still printed), then `lc_act.bench --tasks <panel> --episodes 10`.
+val L1 is still printed), then `lc_act.sim.bench --tasks <panel> --episodes 10`.
 Same inits for every experiment, so results compare pair by pair.
 
 **Keep** when the 60 target rollouts gain at least 3 successes over the
