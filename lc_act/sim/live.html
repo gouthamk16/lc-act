@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LC-ACT</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: "Segoe UI", sans-serif; background: #12140f; color: #efe7d2; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 20px 32px; }
+  h1 { font-weight: 560; font-size: 1.4rem; margin: 0 0 4px; }
+  p.note { margin: 0 0 16px; color: #b7ad96; }
+  img { width: 100%; background: #000; border-radius: 8px; }
+  #status { min-height: 1.4em; margin: 10px 0; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid #3c4033; background: #1c1f17; color: inherit; }
+  button { font: inherit; padding: 10px 14px; border-radius: 8px; border: 0; background: #e2b657; color: #1a160c; cursor: pointer; }
+  button.reset { background: #2a2e24; color: #efe7d2; }
+  .suite { margin-top: 16px; }
+  .suite h2 { font-size: 0.95rem; font-weight: 560; margin: 0 0 6px; color: #e2b657; }
+  .suite h2 span { color: #b7ad96; font-weight: 400; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { background: #2a2e24; color: #efe7d2; font-size: 0.85rem; padding: 7px 10px; text-align: left; }
+  .chips button small { color: #b7ad96; margin-left: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>LC-ACT</h1>
+  <p class="note">One 7.7M-parameter policy trained on all 40 LIBERO tasks. Pick a task, or type an instruction in your own words: the scene loads from the closest trained task and the policy hears exactly what you typed. The number on each task is its benchmark success rate. Workspace camera on the left, wrist on the right.</p>
+  <img id="view" alt="MuJoCo cameras" src="/stream">
+  <p id="status">Loading the policy and the simulator…</p>
+  <form id="go">
+    <input id="prompt" name="prompt" placeholder="put the bowl on the plate" autocomplete="off">
+    <button type="submit">Run</button>
+    <button type="button" class="reset" id="reset">Reset</button>
+  </form>
+  <div id="suites"></div>
+</main>
+<script>
+const status = document.getElementById("status");
+const prompt = document.getElementById("prompt");
+async function refresh() {
+  const res = await fetch("/status");
+  const body = await res.json();
+  status.textContent = body.message;
+}
+async function tasks() {
+  const res = await fetch("/tasks");
+  const body = await res.json();
+  if (!body.suites.length) { setTimeout(tasks, 500); return; }
+  const root = document.getElementById("suites");
+  for (const suite of body.suites) {
+    const section = document.createElement("section");
+    section.className = "suite";
+    const title = document.createElement("h2");
+    title.textContent = suite.label + " ";
+    if (suite.success !== null) {
+      const score = document.createElement("span");
+      score.textContent = `${Math.round(suite.success * 100)}%`;
+      title.appendChild(score);
+    }
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    for (const task of suite.tasks) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = task.text;
+      if (task.success !== null) {
+        const score = document.createElement("small");
+        score.textContent = `${Math.round(task.success * 100)}%`;
+        button.appendChild(score);
+      }
+      button.onclick = () => { prompt.value = task.text; document.getElementById("go").requestSubmit(); };
+      chips.appendChild(button);
+    }
+    section.append(title, chips);
+    root.appendChild(section);
+  }
+}
+document.getElementById("go").onsubmit = async (event) => {
+  event.preventDefault();
+  const res = await fetch("/prompt", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({text: prompt.value})});
+  const body = await res.json();
+  status.textContent = body.message;
+};
+document.getElementById("reset").onclick = async () => {
+  const res = await fetch("/reset", {method: "POST"});
+  const body = await res.json();
+  status.textContent = body.message;
+};
+tasks();
+setInterval(refresh, 500);
+</script>
+</body>
+</html>

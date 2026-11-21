@@ -10,3 +10,65 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["lc_act*"]
+
+[tool.setuptools.package-data]
+"lc_act.sim" = ["live.html"]
+
+# Same rules as openpi (Physical-Intelligence/openpi).
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["kaggle"]
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "C4",
+    "DTZ",
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "FBT",
+    "FURB",
+    "I",
+    "ICN",
+    "ISC",
+    "LOG",
+    "N",
+    "PD",
+    "PERF",
+    "PIE",
+    "PLC",
+    "PLE",
+    "PLR1",
+    "PLR5",
+    "PLW",
+    "PT",
+    "Q",
+    "RET",
+    "RUF",
+    "SIM",
+    "SLF",
+    "T10",
+    "T20",
+    "UP",
+    "W",
+]
+ignore = [
+    "T201",   # We use print statements.
+    "PD008",  # Lots of false positives.
+    "ISC001", # Disabling to support ruff format.
+    "LOG015", # Use logger.info.
+]
+unfixable = [
+    "B905", # Fix defaults to strict=False, which is not what we want.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*_test.py" = ["SLF001"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+force-sort-within-sections = true
+single-line-exclusions = ["collections.abc", "typing", "typing_extensions"]

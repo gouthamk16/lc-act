@@ -3,6 +3,8 @@ torchvision
 lerobot[libero]
 av
 pytest
+ruff
+tyro
 imageio
 imageio-ffmpeg
 numpy
