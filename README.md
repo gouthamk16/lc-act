@@ -10,7 +10,7 @@ GitHub: [gouthamk16/lc-act](https://github.com/gouthamk16/lc-act). In
 
 https://github.com/user-attachments/assets/625e6b4f-1673-4be4-ab51-8bfe6b167ec2
 
-*The all-40-task policy driven from the web console (`python -m lc_act.live`):
+*The all-40-task policy driven from the web console (`python -m lc_act.sim.live`):
 type or pick an instruction, and the matching LIBERO scene runs closed loop.*
 
 ![Panda arm picking an object and placing it in the basket, frames left to right](assets/image.png)
@@ -44,7 +44,7 @@ Training uses all 40 tasks of the four standard LIBERO suites (Spatial,
 Object, Goal, Long) and gives the model the previous frame and state as well
 (`--n-obs 2`). During training only, the encoder also learns to predict frozen
 DINOv2 features of the current frame and of the frame one chunk ahead; those
-heads are dropped at inference. Evaluation (`lc_act.bench`) runs every task of
+heads are dropped at inference. Evaluation (`lc_act.sim.bench`) runs every task of
 all four suites, the protocol MINERVA and π₀.₅ report.
 
 The model is 8.0M parameters at inference.
@@ -86,15 +86,15 @@ packs them as q95 JPEG, ~30 GB of scratch on disk and 3.6 GB kept), then the
 frozen DINOv2 targets (~15 min, 420 MB):
 
 ```bash
-python -m lc_act.cache
-python -m lc_act.teacher
+python -m lc_act.training.cache
+python -m lc_act.training.teacher
 ```
 
 Long train. The cosine learning rate schedule spans the `--max-hours`
 deadline, or `--epochs` when there is none:
 
 ```bash
-python -u -m lc_act.train --out outputs/lc_act_all40 --max-hours 4 --epochs 999 --save-every 2000
+python -u -m lc_act.training.train --out outputs/lc_act_all40 --max-hours 4 --epochs 999 --save-every 2000
 ```
 
 `--object-only` restricts training to the ten Object tasks.
@@ -107,7 +107,7 @@ Resume after a stop or crash (pass the same `--n-obs` the checkpoint was
 trained with):
 
 ```bash
-python -m lc_act.train --resume outputs/lc_act/last.pt --out outputs/lc_act --epochs 20 --max-hours 0
+python -m lc_act.training.train --resume outputs/lc_act/last.pt --out outputs/lc_act --epochs 20 --max-hours 0
 ```
 
 `--max-hours 2` is still the default if you omit the flag. `--max-hours 0`
@@ -119,7 +119,7 @@ MINERVA reports with N = 50). Each LIBERO env holds ~2.9 GB of RAM, so keep
 `--envs 2` on a 10 GB WSL box and do not run it next to training:
 
 ```bash
-python -m lc_act.bench --ckpt outputs/lc_act_all40/last.pt --episodes 20 --out outputs/lc_act_all40/bench.json
+python -m lc_act.sim.bench --ckpt outputs/lc_act_all40/last.pt --episodes 20 --out outputs/lc_act_all40/bench.json
 ```
 
 Several `--ckpt` paths average the members' action chunks (they must share
@@ -131,7 +131,7 @@ of age alone.
 The older single-task eval runs ten fixed-seed soup episodes and saves episode zero:
 
 ```bash
-python -m lc_act.eval \
+python -m lc_act.sim.eval \
   --ckpt outputs/lc_act/last.pt \
   --episodes 10 \
   --seed 0 \
@@ -149,7 +149,7 @@ task that shares the most words with it. Stop the benchmark first: each LIBERO
 env holds ~2.9 GB of RAM.
 
 ```bash
-python -m lc_act.live
+python -m lc_act.sim.live
 ```
 
 Then open http://127.0.0.1:8765.
@@ -168,7 +168,7 @@ integration.
 
 ## Results
 
-All numbers come from `lc_act.bench`: every task of the four suites, LeRobot
+All numbers come from `lc_act.sim.bench`: every task of the four suites, LeRobot
 step caps, replan every step with temporal ensembling. "20/task" is init
 states 0–19 (800 rollouts); "50/task" is init states 0–49 (2,000 rollouts), the
 protocol MINERVA reports.
@@ -190,7 +190,7 @@ ensemble averages the action chunks of four models of the same configuration
 Object and Goal and loses on Spatial and Long, at 3.3× the parameters. The four checkpoints are not in the repository:
 
 ```bash
-python -m lc_act.bench --episodes 50 --ckpt \
+python -m lc_act.sim.bench --episodes 50 --ckpt \
   outputs/lc_act_film40/last.pt outputs/ar_ckpt/p2s1_seed1/last.pt \
   outputs/ar_ckpt/p2s1_seed2/last.pt outputs/kaggle/r2/base_s24k/last.pt
 ```
