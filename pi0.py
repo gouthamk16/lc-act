@@ -97,6 +97,10 @@ def fast_tokenizer(action_chunk: np.ndarray, num_coeffs: int) -> np.ndarray:
     # For now, we will just return the flattened coefficients as tokens
     return flattened_coeffs
 
+# Interestingly it seems that we can just import it directlyt from the openpi repo via transformers.
+from transformers import AutoProcessor
+tokenizer = AutoProcessor.from_pretrained("physical-intelligence/fast", trust_remote_code=True)
+
 def main():
     # Example usage
     x = np.array([0.0, 1.32e-1, 2.5e-1, 3.7e-1, 4.9e-1, 6.1e-1], dtype=np.float32)
@@ -106,6 +110,10 @@ def main():
     x_reconstructed = idct3(X)
     print("Reconstructed signal:", np.round(x_reconstructed, 5))
     plot_dct_reconstruction(x)
+    # Trying out fast tokenizer
+    action_chunk = np.random.rand(10).astype(np.float32)  # Example action chunk
+    tokens = tokenizer(action_chunk.tolist(), return_tensors="pt")  # Using the imported tokenizer
+    print("FAST tokenizer output tokens:", tokens)
 
 if __name__ == "__main__":
     main()
